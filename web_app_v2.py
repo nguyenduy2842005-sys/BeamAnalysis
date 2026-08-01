@@ -2526,7 +2526,7 @@ def main():
                 unsafe_allow_html=True
             )
             # Thu nhỏ width của ảnh từ 280 xuống 75 để triệt tiêu khoảng trống thừa
-            st.image("LOGO/TOOLBOX.png", width=75)
+            st.image("LOGO/TOOLBOX.png", width=150)
             st.markdown("</div>", unsafe_allow_html=True)
 
         with title_col:
