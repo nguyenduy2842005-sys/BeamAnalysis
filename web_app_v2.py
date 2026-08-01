@@ -2504,52 +2504,65 @@ def main():
     """, unsafe_allow_html=True)
     # ════════════════════════════════════════════════════════════
 
-    # ── Header row: nút ☰ + tiêu đề ──────────────────
-    # Căn giữa theo chiều dọc (vertical_alignment) giúp icon và text thẳng hàng đẹp mắt
-    hcol1, hcol2 = st.columns([0.05, 0.95], vertical_alignment="center")
+    # ── Header row: Đưa toàn bộ ra chính giữa giao diện ──────────────────
+    # Tạo khoảng trống hai bên [1, 8, 1] hoặc [0.5, 9, 0.5] để ép cụm nội dung vào giữa
+    _, center_col, _ = st.columns([0.5, 9.0, 0.5])
 
-    with hcol1:
-        icon = "☰"
-        if st.button(icon, key="toggle_sidebar", help="Mở/đóng bảng nhập liệu"):
-            st.session_state.sidebar_open = not st.session_state.sidebar_open
-            st.rerun()
+    with center_col:
+        # Sử dụng CSS Flexbox để căn giữa tuyệt đối cả chiều ngang và dọc cho cụm Header
+        st.markdown(
+            """
+            <div style="
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 20px;
+                padding: 15px 0;
+                width: 100%;
+            ">
+            """,
+            unsafe_allow_html=True
+        )
 
-    with hcol2:
-        # Tinh chỉnh lại tỷ lệ cột cho gọn gàng (logo vừa vặn, không chiếm quá nhiều khoảng trống)
-        logo_col, title_col = st.columns([0.08, 0.92], vertical_alignment="center")
+        # Tạo các cột con bên trong khối trung tâm để chứa: Nút Toggle, Logo và Text
+        sub_col1, sub_col2, sub_col3 = st.columns([0.08, 0.18, 0.74], vertical_alignment="center")
 
-        with logo_col:
-            st.markdown(
-                """
-                <div style="display: flex; align-items: center; justify-content: flex-start; height: 100%;">
-                """,
-                unsafe_allow_html=True
-            )
-            # Thu nhỏ width của ảnh từ 280 xuống 75 để triệt tiêu khoảng trống thừa
-            st.image("LOGO/TOOLBOX.png", width=150)
-            st.markdown("</div>", unsafe_allow_html=True)
+        with sub_col1:
+            icon = "☰"
+            if st.button(icon, key="toggle_sidebar", help="Mở/đóng bảng nhập liệu"):
+                st.session_state.sidebar_open = not st.session_state.sidebar_open
+                st.rerun()
 
-        with title_col:
+        with sub_col2:
+            # Hiển thị logo với kích thước to rõ (ví dụ width=130)
+            st.image("LOGO/TOOLBOX.png", width=130)
+
+        with sub_col3:
+            # Tiêu đề to bản, căn giữa và bắt mắt
             st.markdown(
                 """
                 <div style="
                     display: flex;
                     flex-direction: column;
                     justify-content: center;
-                    height: 100%;
-                    margin-left: -10px;
                 ">
                     <div style="
-                        font-size: 26px;
-                        font-weight: 700;
-                        line-height: 1.15;
+                        font-size: 32px;
+                        font-weight: 800;
+                        letter-spacing: 0.5px;
+                        line-height: 1.2;
+                        background: linear-gradient(90deg, #ffffff, #b0c4de);
+                        -webkit-background-clip: text;
+                        -webkit-text-fill-color: transparent;
                     ">
                         BEAM ANALYSIS TOOLBOX
                     </div>
                     <div style="
-                        font-size: 14px;
-                        opacity: 0.7;
-                        margin-top: 3px;
+                        font-size: 15px;
+                        opacity: 0.75;
+                        margin-top: 5px;
+                        font-weight: 400;
+                        letter-spacing: 0.3px;
                     ">
                         Simplified Structural Analysis Tool
                     </div>
@@ -2557,6 +2570,12 @@ def main():
                 """,
                 unsafe_allow_html=True
             )
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Đường kẻ ngang tinh tế phía dưới header giúp phân tách bố cục trang web đẹp hơn
+    st.markdown("<hr style='margin-top: 0px; margin-bottom: 25px; border-color: rgba(255,255,255,0.1);'>",
+                unsafe_allow_html=True)
     # ── Tabs ──────────────────────────────────────────
     # Thêm tab "Feedback" vào danh sách
     tab1, tab2, tab3, tab4 = st.tabs(["Single Beam", "Continuous Beam", "Plane Frame", "📋 Feedback"])
