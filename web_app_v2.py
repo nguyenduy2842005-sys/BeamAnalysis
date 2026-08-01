@@ -2484,35 +2484,7 @@ def main():
     # Khởi tạo trạng thái sidebar lần đầu
     if "sidebar_open" not in st.session_state:
         st.session_state.sidebar_open = True
-    # ══════════════════════════════════════════════════════
-    # HEADER LOGO
-    # ══════════════════════════════════════════════════════
-
-    st.markdown(
-        """
-        <div style="
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 5px 0px 10px 0px;
-        ">
-        """,
-        unsafe_allow_html=True
-    )
-
-    # Logo nằm trong thư mục LOGO của GitHub Repository
-    st.image("LOGO/TOOLBOX.png", width=280)
-
-    st.markdown(
-        """
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    # ══════════════════════════════════════════════════════
-    # END HEADER LOGO
-    # ══════════════════════════════════════════════════════
+ 
     inject_css()
 
     # ════════════════════════════════════════════════════════════
