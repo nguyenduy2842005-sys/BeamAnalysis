@@ -2484,7 +2484,7 @@ def main():
     # Khởi tạo trạng thái sidebar lần đầu
     if "sidebar_open" not in st.session_state:
         st.session_state.sidebar_open = True
- 
+
     inject_css()
 
     # ════════════════════════════════════════════════════════════
@@ -2506,7 +2506,7 @@ def main():
 
     # ── Header row: nút ☰ + tiêu đề ──────────────────
     # Căn giữa theo chiều dọc (vertical_alignment) giúp icon và text thẳng hàng đẹp mắt
-    hcol1, hcol2 = st.columns([0.12, 0.88], vertical_alignment="center")
+    hcol1, hcol2 = st.columns([0.05, 0.95], vertical_alignment="center")
 
     with hcol1:
         icon = "☰"
@@ -2515,10 +2515,19 @@ def main():
             st.rerun()
 
     with hcol2:
-        logo_col, title_col = st.columns([0.12, 0.88], vertical_alignment="center")
+        # Tinh chỉnh lại tỷ lệ cột cho gọn gàng (logo vừa vặn, không chiếm quá nhiều khoảng trống)
+        logo_col, title_col = st.columns([0.08, 0.92], vertical_alignment="center")
 
         with logo_col:
-            st.image("LOGO/TOOLBOX.png", width=280)
+            st.markdown(
+                """
+                <div style="display: flex; align-items: center; justify-content: flex-start; height: 100%;">
+                """,
+                unsafe_allow_html=True
+            )
+            # Thu nhỏ width của ảnh từ 280 xuống 75 để triệt tiêu khoảng trống thừa
+            st.image("LOGO/TOOLBOX.png", width=75)
+            st.markdown("</div>", unsafe_allow_html=True)
 
         with title_col:
             st.markdown(
@@ -2528,18 +2537,19 @@ def main():
                     flex-direction: column;
                     justify-content: center;
                     height: 100%;
+                    margin-left: -10px;
                 ">
                     <div style="
-                        font-size: 28px;
+                        font-size: 26px;
                         font-weight: 700;
-                        line-height: 1.1;
+                        line-height: 1.15;
                     ">
                         BEAM ANALYSIS TOOLBOX
                     </div>
                     <div style="
-                        font-size: 15px;
+                        font-size: 14px;
                         opacity: 0.7;
-                        margin-top: 4px;
+                        margin-top: 3px;
                     ">
                         Simplified Structural Analysis Tool
                     </div>
@@ -2547,7 +2557,6 @@ def main():
                 """,
                 unsafe_allow_html=True
             )
-
     # ── Tabs ──────────────────────────────────────────
     # Thêm tab "Feedback" vào danh sách
     tab1, tab2, tab3, tab4 = st.tabs(["Single Beam", "Continuous Beam", "Plane Frame", "📋 Feedback"])
