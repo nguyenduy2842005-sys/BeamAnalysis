@@ -2515,11 +2515,38 @@ def main():
             st.rerun()
 
     with hcol2:
-        # Ép line-height cố định giúp font chữ hiển thị trọn vẹn 100% không lo bị cắt xén
-        st.markdown(
-            "<h2 style='margin: 0px; padding: 0px; line-height: 1.2;'>🏗️ DBeam Analysis</h2>",
-            unsafe_allow_html=True
-        )
+        logo_col, title_col = st.columns([0.12, 0.88], vertical_alignment="center")
+
+        with logo_col:
+            st.image("TOOLBOX.png", width=90)
+
+        with title_col:
+            st.markdown(
+                """
+                <div style="
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    height: 100%;
+                ">
+                    <div style="
+                        font-size: 28px;
+                        font-weight: 700;
+                        line-height: 1.1;
+                    ">
+                        BEAM ANALYSIS TOOLBOX
+                    </div>
+                    <div style="
+                        font-size: 15px;
+                        opacity: 0.7;
+                        margin-top: 4px;
+                    ">
+                        Simplified Structural Analysis Tool
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
     # ── Tabs ──────────────────────────────────────────
     # Thêm tab "Feedback" vào danh sách
