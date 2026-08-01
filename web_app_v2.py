@@ -2504,41 +2504,39 @@ def main():
     """, unsafe_allow_html=True)
     # ════════════════════════════════════════════════════════════
 
-    # ── Header row: Đưa toàn bộ ra chính giữa giao diện ──────────────────
-    # Tạo khoảng trống hai bên [1, 8, 1] hoặc [0.5, 9, 0.5] để ép cụm nội dung vào giữa
-    _, center_col, _ = st.columns([0.5, 9.0, 0.5])
+    # ── Header row: Nút ☰ nằm bên trái, Logo và Tiêu đề nằm ở giữa ──────────────────
+    header_col1, header_col2, header_col3 = st.columns([0.05, 0.90, 0.05], vertical_alignment="center")
 
-    with center_col:
-        # Sử dụng CSS Flexbox để căn giữa tuyệt đối cả chiều ngang và dọc cho cụm Header
+    with header_col1:
+        # Nút taskbar (☰) nằm sát lề trái, thẳng hàng hoàn hảo với các tab bên dưới
+        icon = "☰"
+        if st.button(icon, key="toggle_sidebar", help="Mở/đóng bảng nhập liệu"):
+            st.session_state.sidebar_open = not st.session_state.sidebar_open
+            st.rerun()
+
+    with header_col2:
+        # Khối giữa chứa Logo và Tiêu đề được căn giữa tuyệt đối
         st.markdown(
             """
             <div style="
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                gap: 20px;
-                padding: 15px 0;
+                gap: 25px;
                 width: 100%;
             ">
             """,
             unsafe_allow_html=True
         )
 
-        # Tạo các cột con bên trong khối trung tâm để chứa: Nút Toggle, Logo và Text
-        sub_col1, sub_col2, sub_col3 = st.columns([0.08, 0.18, 0.74], vertical_alignment="center")
+        logo_sub_col, text_sub_col = st.columns([0.15, 0.85], vertical_alignment="center")
 
-        with sub_col1:
-            icon = "☰"
-            if st.button(icon, key="toggle_sidebar", help="Mở/đóng bảng nhập liệu"):
-                st.session_state.sidebar_open = not st.session_state.sidebar_open
-                st.rerun()
+        with logo_sub_col:
+            # Tăng kích thước logo to rõ (width=135)
+            st.image("LOGO/TOOLBOX.png", width=135)
 
-        with sub_col2:
-            # Hiển thị logo với kích thước to rõ (ví dụ width=130)
-            st.image("LOGO/TOOLBOX.png", width=130)
-
-        with sub_col3:
-            # Tiêu đề to bản, căn giữa và bắt mắt
+        with text_sub_col:
+            # Tiêu đề to bản, sắc nét và chuyên nghiệp
             st.markdown(
                 """
                 <div style="
@@ -2573,8 +2571,8 @@ def main():
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # Đường kẻ ngang tinh tế phía dưới header giúp phân tách bố cục trang web đẹp hơn
-    st.markdown("<hr style='margin-top: 0px; margin-bottom: 25px; border-color: rgba(255,255,255,0.1);'>",
+    # Đường kẻ ngang phân tách header thanh lịch
+    st.markdown("<hr style='margin-top: 10px; margin-bottom: 25px; border-color: rgba(255,255,255,0.1);'>",
                 unsafe_allow_html=True)
     # ── Tabs ──────────────────────────────────────────
     # Thêm tab "Feedback" vào danh sách
