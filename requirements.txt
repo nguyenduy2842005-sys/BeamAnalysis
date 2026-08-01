@@ -1,0 +1,8 @@
+numpy>=1.26
+matplotlib>=3.8
+pandas>=2.0
+plotly>=5.20
+streamlit>=1.35
+kaleido>=0.2.1
+python-docx>=1.1.0
+streamlit-aggrid
