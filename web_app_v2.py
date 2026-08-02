@@ -21,8 +21,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from docx import Document
-from docx.shared import Inches
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 
 from beam_core import BeamInput, BeamResult, solve_beam
@@ -831,6 +829,279 @@ def docx_with_images(
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()
+def docx_with_images(
+    report_text: str,
+    report_title: str,
+    figures: list[tuple[str, go.Figure]]
+) -> bytes:
+    """Create a polished engineering calculation DOCX with sharp figures."""
+    from docx import Document
+    from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Cm, Inches, Pt, RGBColor
+    import os
+    import re
+    import tempfile
+
+    BLUE = RGBColor(31, 77, 120)
+    ACCENT = RGBColor(46, 116, 181)
+    MUTED = RGBColor(95, 105, 115)
+    LIGHT_FILL = "F2F4F7"
+    OK_FILL = "EAF4ED"
+    CONTENT_WIDTH_DXA = 9360
+
+    def set_run_font(run, name="Calibri", size=11, color=None, bold=None, italic=None):
+        run.font.name = name
+        run._element.rPr.rFonts.set(qn("w:ascii"), name)
+        run._element.rPr.rFonts.set(qn("w:hAnsi"), name)
+        run._element.rPr.rFonts.set(qn("w:cs"), name)
+        run.font.size = Pt(size)
+        if color is not None:
+            run.font.color.rgb = color
+        if bold is not None:
+            run.bold = bold
+        if italic is not None:
+            run.italic = italic
+
+    def set_cell_fill(cell, fill):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        shd = tc_pr.find(qn("w:shd"))
+        if shd is None:
+            shd = OxmlElement("w:shd")
+            tc_pr.append(shd)
+        shd.set(qn("w:fill"), fill)
+
+    def set_cell_margins(cell, top=80, start=120, bottom=80, end=120):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        tc_mar = tc_pr.first_child_found_in("w:tcMar")
+        if tc_mar is None:
+            tc_mar = OxmlElement("w:tcMar")
+            tc_pr.append(tc_mar)
+        for key, value in {"top": top, "start": start, "bottom": bottom, "end": end}.items():
+            node = tc_mar.find(qn(f"w:{key}"))
+            if node is None:
+                node = OxmlElement(f"w:{key}")
+                tc_mar.append(node)
+            node.set(qn("w:w"), str(value))
+            node.set(qn("w:type"), "dxa")
+
+    def set_table_width(table, widths_dxa):
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        table.autofit = False
+        tbl_pr = table._tbl.tblPr
+        tbl_w = tbl_pr.find(qn("w:tblW"))
+        if tbl_w is None:
+            tbl_w = OxmlElement("w:tblW")
+            tbl_pr.append(tbl_w)
+        tbl_w.set(qn("w:w"), str(sum(widths_dxa)))
+        tbl_w.set(qn("w:type"), "dxa")
+        grid = table._tbl.tblGrid
+        if grid is None:
+            grid = OxmlElement("w:tblGrid")
+            table._tbl.insert(0, grid)
+        for child in list(grid):
+            grid.remove(child)
+        for width in widths_dxa:
+            col = OxmlElement("w:gridCol")
+            col.set(qn("w:w"), str(width))
+            grid.append(col)
+        for row in table.rows:
+            for i, cell in enumerate(row.cells):
+                width = widths_dxa[min(i, len(widths_dxa) - 1)]
+                cell.width = Pt(width / 20)
+                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+                set_cell_margins(cell)
+                tc_pr = cell._tc.get_or_add_tcPr()
+                tc_w = tc_pr.find(qn("w:tcW"))
+                if tc_w is None:
+                    tc_w = OxmlElement("w:tcW")
+                    tc_pr.append(tc_w)
+                tc_w.set(qn("w:w"), str(width))
+                tc_w.set(qn("w:type"), "dxa")
+
+    def add_rule(paragraph, color="2E74B5", size="10", space="8"):
+        p_pr = paragraph._p.get_or_add_pPr()
+        p_bdr = p_pr.find(qn("w:pBdr"))
+        if p_bdr is None:
+            p_bdr = OxmlElement("w:pBdr")
+            p_pr.append(p_bdr)
+        bottom = OxmlElement("w:bottom")
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), size)
+        bottom.set(qn("w:space"), space)
+        bottom.set(qn("w:color"), color)
+        p_bdr.append(bottom)
+
+    def add_kv_table(doc, rows, widths=(2300, 7060)):
+        table = doc.add_table(rows=0, cols=2)
+        table.style = "Table Grid"
+        for label, value in rows:
+            cells = table.add_row().cells
+            cells[0].text = str(label)
+            cells[1].text = str(value)
+            set_cell_fill(cells[0], LIGHT_FILL)
+        set_table_width(table, list(widths))
+        for row in table.rows:
+            for i, cell in enumerate(row.cells):
+                for p in cell.paragraphs:
+                    p.paragraph_format.space_after = Pt(0)
+                    for r in p.runs:
+                        set_run_font(r, size=9.5, color=BLUE if i == 0 else RGBColor(30, 30, 30), bold=(i == 0))
+        return table
+
+    def add_callout(doc, text, fill=OK_FILL):
+        table = doc.add_table(rows=1, cols=1)
+        table.style = "Table Grid"
+        cell = table.cell(0, 0)
+        cell.text = ""
+        set_cell_fill(cell, fill)
+        p = cell.paragraphs[0]
+        p.paragraph_format.space_after = Pt(0)
+        r = p.add_run(text)
+        set_run_font(r, size=10.5, color=RGBColor(28, 88, 48), bold=True)
+        set_table_width(table, [CONTENT_WIDTH_DXA])
+
+    def add_report_line(doc, line):
+        stripped = line.strip()
+        if not stripped or set(stripped) <= {"=", "-", " "}:
+            return
+        if re.match(r"^\d+\.\s+", stripped):
+            doc.add_heading(stripped, level=1)
+            return
+        if re.match(r"^[a-z]\.\s+", stripped, flags=re.I):
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(2)
+            p.paragraph_format.space_after = Pt(3)
+            r = p.add_run(stripped)
+            set_run_font(r, size=10.5, color=BLUE, bold=True)
+            return
+        looks_tabular = "|" in line or "  " in line or re.search(r"[+-]?\d+\.\d{3,}", line)
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(2)
+        r = p.add_run(line)
+        set_run_font(
+            r,
+            name="Consolas" if looks_tabular else "Calibri",
+            size=8.8 if looks_tabular else 10.5,
+            color=RGBColor(35, 35, 35),
+        )
+
+    def clean_title(text):
+        return re.sub(r"<[^>]+>", "", str(text or "")).strip()
+
+    doc = Document()
+    section = doc.sections[0]
+    section.page_width = Cm(21.59)
+    section.page_height = Cm(27.94)
+    section.top_margin = Inches(1.0)
+    section.bottom_margin = Inches(1.0)
+    section.left_margin = Inches(1.0)
+    section.right_margin = Inches(1.0)
+    section.header_distance = Inches(0.492)
+    section.footer_distance = Inches(0.492)
+
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal._element.rPr.rFonts.set(qn("w:ascii"), "Calibri")
+    normal._element.rPr.rFonts.set(qn("w:hAnsi"), "Calibri")
+    normal.font.size = Pt(11)
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.line_spacing = 1.10
+    for style_name, size, color, before, after in [
+        ("Heading 1", 16, ACCENT, 16, 8),
+        ("Heading 2", 13, ACCENT, 12, 6),
+        ("Heading 3", 12, BLUE, 8, 4),
+    ]:
+        style = doc.styles[style_name]
+        style.font.name = "Calibri"
+        style._element.rPr.rFonts.set(qn("w:ascii"), "Calibri")
+        style._element.rPr.rFonts.set(qn("w:hAnsi"), "Calibri")
+        style.font.size = Pt(size)
+        style.font.color.rgb = color
+        style.font.bold = True
+        style.paragraph_format.space_before = Pt(before)
+        style.paragraph_format.space_after = Pt(after)
+
+    header_p = section.header.paragraphs[0]
+    header_p.text = "Thuyết minh tính toán kết cấu | Beam Analysis Toolbox"
+    header_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    for r in header_p.runs:
+        set_run_font(r, size=8.5, color=MUTED)
+    footer_p = section.footer.paragraphs[0]
+    footer_p.text = "Tài liệu tính toán tự động - cần được kỹ sư phụ trách kiểm tra và phê duyệt trước khi phát hành."
+    footer_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for r in footer_p.runs:
+        set_run_font(r, size=8, color=MUTED)
+
+    title_p = doc.add_paragraph()
+    title_p.paragraph_format.space_after = Pt(4)
+    r = title_p.add_run("THUYẾT MINH TÍNH TOÁN")
+    set_run_font(r, size=24, color=BLUE, bold=True)
+    subtitle_p = doc.add_paragraph()
+    subtitle_p.paragraph_format.space_after = Pt(12)
+    r = subtitle_p.add_run(report_title)
+    set_run_font(r, size=13, color=MUTED, bold=True)
+    add_rule(subtitle_p)
+
+    add_kv_table(doc, [
+        ("Phần mềm", "Beam Analysis Toolbox"),
+        ("Hạng mục", report_title),
+        ("Phương pháp chính", "Phần tử hữu hạn khung phẳng 2D"),
+        ("Phương pháp đối chiếu", "Maxwell-Mohr / nhân biểu đồ Vereshchagin"),
+        ("Đơn vị", "kN, m, kNm"),
+    ])
+    doc.add_paragraph()
+
+    max_diff = re.search(r"Sai khác lớn nhất:\s*([^\n]+)", report_text)
+    if max_diff:
+        add_callout(doc, f"Kiểm tra độc lập FEM - Vereshchagin: sai khác lớn nhất {max_diff.group(1).strip()}.")
+    else:
+        add_callout(doc, "Thuyết minh bao gồm thiết lập mô hình, điều kiện biên, nội lực, phản lực và kiểm tra cân bằng.")
+
+    doc.add_page_break()
+    doc.add_heading("Nội dung thuyết minh", level=1)
+    for line in report_text.split("\n"):
+        add_report_line(doc, line)
+
+    if figures:
+        doc.add_page_break()
+        doc.add_heading("Biểu đồ kết quả", level=1)
+        use_kaleido = ensure_kaleido_chrome()
+        for idx, (name, fig) in enumerate(figures, 1):
+            img_bytes = None
+            if use_kaleido:
+                try:
+                    img_bytes = fig.to_image(format="png", width=1800, height=1050, scale=2, engine="kaleido")
+                except Exception:
+                    img_bytes = None
+            if img_bytes is None:
+                img_bytes = plotly_to_png_fallback(fig) or create_placeholder_image(name)
+
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = tmp.name
+            try:
+                with open(tmp_path, "wb") as f:
+                    f.write(img_bytes)
+                p = doc.add_paragraph()
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.keep_with_next = True
+                p.add_run().add_picture(tmp_path, width=Inches(6.35))
+                cap = doc.add_paragraph()
+                cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                cap.paragraph_format.space_after = Pt(10)
+                r = cap.add_run(f"Hình {idx}. {clean_title(name)}")
+                set_run_font(r, size=9.5, color=MUTED, italic=True)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
+
+
 def report_panel(
     report_text: str | None,
     report_title: str,
@@ -2346,13 +2617,13 @@ def render_plane_frame() -> None:
     # GIAO DIỆN COMING SOON (ĐANG PHÁT TRIỂN)
     # ==========================================
     st.title("🏗️ Plane Frame (Khung Phẳng)")
-    st.info(
-        "🚧 **Tính năng này đang được phát triển (Coming Soon).**\n\nThuật toán giải FEM 2D cho khung phẳng đang trong quá trình hoàn thiện và sẽ sớm được ra mắt. Vui lòng quay lại trong các bản cập nhật tiếp theo!")
-    st.progress(75, text="Tiến độ phát triển: 75%")
+    st.success(
+        "**Plane Frame đã sẵn sàng tính toán.** Kết quả FEM được đối chiếu bằng nhân biểu đồ / Vereshchagin trong thuyết minh."
+    )
 
     # Lệnh return này sẽ chặn không cho chạy đoạn code giao diện cũ ở bên dưới,
     # giúp bạn giữ nguyên được source code mà không cần phải xóa hay comment (#) từng dòng.
-    return
+    st.caption("FEM 2D khung phẳng, kèm đối chiếu chuyển vị bằng nhân biểu đồ / Vereshchagin.")
     # ==========================================
 
     # --- TOÀN BỘ CODE CŨ DƯỚI ĐÂY ĐƯỢC GIỮ NGUYÊN ---
@@ -2418,6 +2689,19 @@ def render_plane_frame() -> None:
         all_V = np.concatenate([er.shear for er in result_pf.element_results])
         all_M = np.concatenate([er.moment for er in result_pf.element_results])
         all_N = np.concatenate([er.axial for er in result_pf.element_results])
+        if getattr(result_pf, "vereshchagin_checks", None):
+            cmp_df = pd.DataFrame([
+                {
+                    "Node": c["node"],
+                    "DOF": c["component"],
+                    "FEM": c["fem"],
+                    "Vereshchagin": c["vereshchagin"],
+                    "Diff": c["diff"],
+                }
+                for c in result_pf.vereshchagin_checks
+            ])
+            st.subheader("Đối chiếu FEM - Vereshchagin")
+            st.dataframe(cmp_df, use_container_width=True, hide_index=True)
         metric_html([
             ("Nmax/Nmin", f"{np.max(all_N):.2f}/{np.min(all_N):.2f} kN"),
             ("Vmax", f"{np.max(np.abs(all_V)):.3f} kN"),

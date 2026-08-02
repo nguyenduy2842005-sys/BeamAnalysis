@@ -110,6 +110,7 @@ class PlaneFrameResult:
     reactions: list[dict]            # per support
     element_results: list[FrameElementResult]
     report: str
+    vereshchagin_checks: list[dict] = field(default_factory=list)
 
 
 # ══════════════════════════════════════════════════════
@@ -711,13 +712,25 @@ def solve_plane_frame(data: PlaneFrameInput) -> PlaneFrameResult:
             y_coords=y_g_arr,
         ))
 
-    report = _build_frame_report(data, node_disp, reactions_out, elem_results)
+    veresh_checks = _frame_vereshchagin_checks(
+        data=data,
+        U=U,
+        K=K,
+        F=F,
+        constrained=constrained,
+        free_dofs=free_dofs,
+        elem_cache=elem_cache,
+    )
+
+    report = _build_frame_report(data, node_disp, reactions_out, elem_results, veresh_checks)
+    report += "\n" + _build_frame_veresh_report(veresh_checks)
 
     return PlaneFrameResult(
         node_displacements=node_disp,
         reactions=reactions_out,
         element_results=elem_results,
         report=report,
+        vereshchagin_checks=veresh_checks,
     )
 
 
@@ -726,7 +739,105 @@ def _frame_elem_dofs(elem: FrameElement) -> list[int]:
     return [3*i, 3*i+1, 3*i+2, 3*j, 3*j+1, 3*j+2]
 
 
-def _build_frame_report(data: PlaneFrameInput, node_disp, reactions, elem_results) -> str:
+def _frame_internal_force_at(elem: FrameElement, u_local: np.ndarray, L: float, x: float) -> tuple[float, float, float]:
+    """Return local internal forces N, V, M at coordinate x from i-node."""
+    xi = x / L
+    EA = elem.E * elem.A
+    EI = elem.E * elem.I
+    q = elem.udl_local
+
+    axial = EA / L * (u_local[3] - u_local[0])
+    bend = np.array([u_local[1], u_local[2], u_local[4], u_local[5]])
+    d2N = np.array([
+        (-6 + 12 * xi) / L ** 2,
+        (-4 + 6 * xi) / L,
+        (6 - 12 * xi) / L ** 2,
+        (-2 + 6 * xi) / L,
+    ])
+    d3N = np.array([12 / L ** 3, 6 / L ** 2, -12 / L ** 3, 6 / L ** 2])
+    moment = EI * (d2N @ bend) + q * L ** 2 * xi * (xi - 1) / 2
+    shear = EI * (d3N @ bend) + q * L * (0.5 - xi)
+    return float(axial), float(shear), float(moment)
+
+
+def _solve_frame_displacement_vector(K: np.ndarray, F: np.ndarray, constrained: list[int], free_dofs: list[int]) -> np.ndarray:
+    """Solve a frame load case with the same boundary conditions."""
+    U = np.zeros(K.shape[0])
+    if not free_dofs:
+        return U
+    K_ff = K[np.ix_(free_dofs, free_dofs)]
+    U_f = np.linalg.solve(K_ff, F[free_dofs])
+    for i, d in enumerate(free_dofs):
+        U[d] = U_f[i]
+    return U
+
+
+def _frame_vereshchagin_checks(data: PlaneFrameInput, U: np.ndarray, K: np.ndarray, F: np.ndarray,
+                               constrained: list[int], free_dofs: list[int], elem_cache) -> list[dict]:
+    """
+    Maxwell-Mohr / Vereshchagin verification.
+
+    For each free global DOF r, apply a unit generalized load at r, then compute:
+        delta_r = sum int(N*n/EA + M*m/EI) dx
+    The integration is numerical so it works for arbitrary element orientation and mixed axial-bending frames.
+    """
+    checks = []
+    free_to_check = list(free_dofs[: min(len(free_dofs), 18)])
+    gauss_xi, gauss_w = np.polynomial.legendre.leggauss(5)
+    xis = 0.5 * (gauss_xi + 1.0)
+    ws = 0.5 * gauss_w
+
+    for dof in free_to_check:
+        F_unit = np.zeros_like(F)
+        F_unit[dof] = 1.0
+        U_unit = _solve_frame_displacement_vector(K, F_unit, constrained, free_dofs)
+
+        delta = 0.0
+        pieces = []
+        for e_idx, elem in enumerate(data.elements):
+            _, T, L, _, _ = elem_cache[e_idx]
+            dofs = _frame_elem_dofs(elem)
+            u_real = T @ U[dofs]
+            u_unit = T @ U_unit[dofs]
+
+            integ_n = 0.0
+            integ_m = 0.0
+            EA = elem.E * elem.A
+            EI = elem.E * elem.I
+            for xi, w in zip(xis, ws):
+                x = xi * L
+                N, _, M = _frame_internal_force_at(
+                    FrameElement(elem.i_node, elem.j_node, elem.E, elem.A, elem.I, 0.0),
+                    u_real,
+                    L,
+                    x,
+                )
+                n, _, m = _frame_internal_force_at(
+                    FrameElement(elem.i_node, elem.j_node, elem.E, elem.A, elem.I, 0.0),
+                    u_unit,
+                    L,
+                    x,
+                )
+                integ_n += w * L * (N * n / EA if abs(EA) > 1e-30 else 0.0)
+                integ_m += w * L * (M * m / EI if abs(EI) > 1e-30 else 0.0)
+            delta += integ_n + integ_m
+            pieces.append({"element": e_idx, "axial": float(integ_n), "bending": float(integ_m)})
+
+        fem_val = float(U[dof])
+        checks.append({
+            "dof": int(dof),
+            "node": int(dof // 3),
+            "component": ["ux", "uy", "rz"][dof % 3],
+            "fem": fem_val,
+            "vereshchagin": float(delta),
+            "diff": float(delta - fem_val),
+            "rel_error": float(abs(delta - fem_val) / max(1.0, abs(fem_val))),
+            "pieces": pieces,
+        })
+    return checks
+
+
+def _build_frame_report(data: PlaneFrameInput, node_disp, reactions, elem_results, veresh_checks=None) -> str:
     lines = []
     lines.append("=" * 52)
     lines.append("   THUYẾT MINH TÍNH TOÁN — KHUNG PHẲNG (FEM)")
@@ -812,6 +923,46 @@ def _build_frame_report(data: PlaneFrameInput, node_disp, reactions, elem_result
 # ══════════════════════════════════════════════════════
 #  DOCX REPORT BUILDER  (called from web_app.py)
 # ══════════════════════════════════════════════════════
+
+def _build_frame_veresh_report(veresh_checks) -> str:
+    lines = []
+    lines.append("")
+    lines.append("=" * 52)
+    lines.append("   PHỤ LỤC KIỂM TRA - NHÂN BIỂU ĐỒ / VERESHCHAGIN")
+    lines.append("=" * 52)
+    lines.append("")
+    lines.append("1. CƠ SỞ TÍNH TOÁN")
+    lines.append("   Công thức Maxwell-Mohr / Vereshchagin:")
+    lines.append("   delta = Sum integral(N*n/EA + M*m/EI) dx")
+    lines.append("   N, M: nội lực do tải trọng thực tế.")
+    lines.append("   n, m: nội lực do tải đơn vị đặt tại bậc tự do cần kiểm tra.")
+    lines.append("   Với khung phẳng tổng quát, tích phân được thực hiện trên từng phần tử bằng Gauss 5 điểm.")
+    lines.append("")
+    lines.append("2. BẢNG SO SÁNH CHUYỂN VỊ")
+    if not veresh_checks:
+        lines.append("   Không có bậc tự do tự do để kiểm tra.")
+        return "\n".join(lines)
+
+    lines.append(f"   {'Nút':>4}  {'DOF':>5}  {'FEM':>14}  {'Veresh.':>14}  {'Sai khác':>14}")
+    lines.append("   " + "-" * 61)
+    for chk in veresh_checks:
+        lines.append(
+            f"   {chk['node']:>4}  {chk['component']:>5}  "
+            f"{chk['fem']:>14.6e}  {chk['vereshchagin']:>14.6e}  {chk['diff']:>14.3e}"
+        )
+    max_abs = max(abs(chk["diff"]) for chk in veresh_checks)
+    lines.append(f"   Sai khác lớn nhất: {max_abs:.3e}")
+    lines.append("")
+    lines.append("3. ĐÓNG GÓP TỪNG PHẦN TỬ CHO 3 DOF ĐẦU TIÊN")
+    for chk in veresh_checks[:3]:
+        lines.append(f"   Nút {chk['node']} / {chk['component']}:")
+        for pc in chk["pieces"]:
+            lines.append(
+                f"     PT {pc['element']:>3}: delta_N = {pc['axial']:+.4e}, "
+                f"delta_M = {pc['bending']:+.4e}, tổng = {pc['axial'] + pc['bending']:+.4e}"
+            )
+    return "\n".join(lines)
+
 
 def build_docx_bytes(report_text: str, title: str = "Thuyết Minh Tính Toán") -> bytes:
     """
