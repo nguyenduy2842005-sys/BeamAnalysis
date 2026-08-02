@@ -3235,7 +3235,7 @@ def render_plane_frame() -> None:
     elems_default = pd.DataFrame(
         {"i": [0, 1, 3], "j": [1, 2, 2], "E": [200e6] * 3, "A": [0.01] * 3, "I": [1e-4] * 3,
          "udl_local": [0.0] * 3})
-    sups_default = pd.DataFrame({"node": [0, 3], "ux": [True, True], "uy": [True, True], "rz": [True, True]})
+    sups_default = pd.DataFrame({"node": [0, 3], "Loại gối": ["Ngàm", "Ngàm"]})
 
     tab_draw, tab_el, tab_sup, tab_pl_nd, tab_udl = st.tabs(
         ["✏️ Vẽ khung", "🧱 Vật liệu & Tiết diện", "🔒 Supports", "⬇️ Node Loads", "📏 Element UDL"])
@@ -3262,11 +3262,12 @@ def render_plane_frame() -> None:
             for _, r in cur_el_df_draw.iterrows()
             if pd.notna(r.get("i")) and pd.notna(r.get("j"))
         ]
-        init_sups = [
-            {"node": int(r["node"]), "ux": bool(r.get("ux", True)), "uy": bool(r.get("uy", True)),
-             "rz": bool(r.get("rz", True))}
-            for _, r in cur_sup_df_draw.iterrows() if pd.notna(r.get("node"))
-        ]
+        init_sups = []
+        for _, r in cur_sup_df_draw.iterrows():
+            if pd.isna(r.get("node")):
+                continue
+            ux, uy, rz = _pf_label_to_bool(r.get("Loại gối", "Ngàm"))
+            init_sups.append({"node": int(r["node"]), "ux": ux, "uy": uy, "rz": rz})
 
         canvas_result = frame_canvas(
             nodes=init_nodes, elements=init_elems, supports=init_sups,
@@ -3298,7 +3299,11 @@ def render_plane_frame() -> None:
                     new_el_rows.append({"i": e["i"], "j": e["j"], "E": E, "A": A, "I": I, "udl_local": udl})
                 new_el_df = pd.DataFrame(new_el_rows, columns=["i", "j", "E", "A", "I", "udl_local"])
 
-                new_sup_df = pd.DataFrame(canvas_result.get("supports", []), columns=["node", "ux", "uy", "rz"])
+                new_sup_rows = [
+                    {"node": s["node"], "Loại gối": _PF_TYPE_TO_LABEL.get(_pf_support_type(s), "Ngàm")}
+                    for s in canvas_result.get("supports", [])
+                ]
+                new_sup_df = pd.DataFrame(new_sup_rows, columns=["node", "Loại gối"])
 
                 pf_set_table("pf_nd_ed", new_nodes_df)
                 pf_set_table("pf_el_ed", new_el_df)
@@ -3415,8 +3420,25 @@ def render_plane_frame() -> None:
                    "panel phía trên chỉ là cách gán nhanh E, A, I, không bắt buộc phải dùng.")
 
     with tab_sup:
-        st.caption("Bảng gối tựa — được gán nhanh từ chế độ 🔒 Gối tựa trên canvas, có thể tinh chỉnh trực tiếp ở đây.")
-        df_sup = safe_data_editor("pf_sup_ed", sups_default, **cfg)
+        st.caption(
+            "Chỉ cần chọn **1 loại gối** cho mỗi nút (Ngàm / Khớp / Di động ⊥Y / Di động ⊥X) — "
+            "bảng này đồng bộ 2 chiều với thao tác **🔒 Gối tựa** trên canvas ở tab Vẽ khung, "
+            "đổi ở bên nào cũng ra kết quả giống nhau nên không cần khai báo lại lần thứ hai."
+        )
+        sup_cfg = {
+            "width": "stretch",
+            "num_rows": "dynamic",
+            "hide_index": True,
+            "column_config": {
+                "Loại gối": st.column_config.SelectboxColumn(
+                    "Loại gối", options=PF_SUPPORT_LABELS, required=True, default="Ngàm",
+                ),
+            },
+        }
+        df_sup_label = safe_data_editor("pf_sup_ed", sups_default, **sup_cfg)
+        # Suy ra ux, uy, rz từ nhãn "Loại gối" — để phần tính toán / vẽ hình phía
+        # dưới (đang đọc ux, uy, rz) không cần sửa gì, chỉ người dùng nhìn thấy 1 lựa chọn duy nhất.
+        df_sup = _pf_sup_with_bool_cols(df_sup_label)
 
     with tab_pl_nd:
         nloads_default = pd.DataFrame(
@@ -3585,6 +3607,47 @@ def render_plane_frame() -> None:
             "plane_frame",
             figures=figures
         )
+PF_SUPPORT_LABELS = ["Ngàm", "Khớp", "Di động ⊥Y", "Di động ⊥X"]
+
+_PF_LABEL_TO_TYPE = {
+    "Ngàm": "FIXED",
+    "Khớp": "PIN",
+    "Di động ⊥Y": "ROLX",
+    "Di động ⊥X": "ROLY",
+}
+_PF_TYPE_TO_LABEL = {v: k for k, v in _PF_LABEL_TO_TYPE.items()}
+_PF_TYPE_TO_BOOL = {
+    "FIXED": (True, True, True),
+    "PIN": (True, True, False),
+    "ROLX": (False, True, False),
+    "ROLY": (True, False, False),
+}
+
+
+def _pf_label_to_bool(label) -> tuple[bool, bool, bool]:
+    """Quy đổi nhãn 'Loại gối' (Ngàm/Khớp/Di động ⊥Y/Di động ⊥X) sang 3 cờ ux, uy, rz."""
+    t = _PF_LABEL_TO_TYPE.get(str(label).strip(), "FIXED")
+    return _PF_TYPE_TO_BOOL[t]
+
+
+def _pf_sup_with_bool_cols(df_sup: pd.DataFrame) -> pd.DataFrame:
+    """
+    Bổ sung 3 cột ux, uy, rz (suy ra từ cột 'Loại gối' thân thiện với người
+    dùng) vào bảng Supports, để toàn bộ phần tính toán FEM / vẽ hình phía sau
+    (đang đọc ux, uy, rz) không cần sửa gì thêm — người dùng chỉ khai báo
+    ĐÚNG MỘT LẦN, bằng đúng MỘT nhãn duy nhất, ở canvas hoặc ở bảng đều được.
+    """
+    if df_sup is None or df_sup.empty:
+        return df_sup
+    out = df_sup.copy()
+    if "Loại gối" in out.columns:
+        bools = out["Loại gối"].apply(_pf_label_to_bool)
+        out["ux"] = [b[0] for b in bools]
+        out["uy"] = [b[1] for b in bools]
+        out["rz"] = [b[2] for b in bools]
+    return out
+
+
 def _pf_support_type(row) -> str:
     """
     Xác định loại gối tựa từ 3 cờ ràng buộc (ux, uy, rz) của bảng Supports,
