@@ -409,19 +409,6 @@ _frame_canvas_component = components.declare_component(
     url="https://cdn.jsdelivr.net/gh/nguyenduy2842005-sys/BeamAnalysis@main/frame_canvas_component/index.html",
 )
 
-@st.cache_resource
-def _get_frame_canvas_component():
-    with open(_SRC_HTML_PATH, "r", encoding="utf-8") as f:
-        html_content = f.read()
-
-    tmp_dir = tempfile.mkdtemp(prefix="frame_canvas_")
-    with open(os.path.join(tmp_dir, "index.html"), "w", encoding="utf-8") as f:
-        f.write(html_content)
-
-    return components.declare_component("frame_canvas", path=tmp_dir)
-
-_frame_canvas_component = _get_frame_canvas_component()
-
 
 def frame_canvas(nodes, elements, supports, snap: float = 0.5,
                   reset_token: int = 0, height: int = 560, key: str | None = None):
