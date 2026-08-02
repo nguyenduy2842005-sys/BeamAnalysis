@@ -3585,6 +3585,116 @@ def render_plane_frame() -> None:
             "plane_frame",
             figures=figures
         )
+def _pf_support_type(row) -> str:
+    """
+    Xác định loại gối tựa từ 3 cờ ràng buộc (ux, uy, rz) của bảng Supports,
+    dùng chung quy ước với canvas vẽ khung (xem hàm JS boolToType):
+      - FIXED : ux, uy, rz đều bị ràng buộc      -> ngàm cứng
+      - PIN   : ux, uy bị ràng buộc, rz tự do    -> khớp cố định
+      - ROLX  : chỉ uy bị ràng buộc (ux tự do)   -> gối di động, trượt ngang
+      - ROLY  : chỉ ux bị ràng buộc (uy tự do)   -> gối di động, trượt đứng
+    """
+    ux = bool(row.get("ux", False))
+    uy = bool(row.get("uy", False))
+    rz = bool(row.get("rz", False))
+
+    if ux and uy and rz:
+        return "FIXED"
+    if ux and uy and not rz:
+        return "PIN"
+    if not ux and uy:
+        return "ROLX"
+    if ux and not uy:
+        return "ROLY"
+    return "PIN"  # trường hợp không xác định -> mặc định vẽ như khớp cố định
+
+
+def draw_support_pf(fig: go.Figure, x: float, y: float, sup_type: str, size: float) -> None:
+    """
+    Vẽ ký hiệu gối tựa tại node (x, y) của khung phẳng, ĐỒNG BỘ phong cách
+    vẽ với các tab Dầm đơn / Dầm liên tục (tam giác đặc cho khớp, chấm
+    tròn + gạch chân cho gối di động, hình chữ nhật đặc có gạch hatch cho
+    ngàm cứng) — dùng chung màu COLOR_SUP.
+    """
+    h = size * 1.15   # chiều cao tam giác / khoảng lùi gối
+    w = size * 0.95   # nửa bề rộng đáy tam giác
+    floor = size * 1.5
+
+    if sup_type == "FIXED":
+        fig.add_shape(
+            type="rect",
+            x0=x - size, x1=x + size,
+            y0=y - size * 0.4, y1=y,
+            fillcolor=COLOR_SUP, line={"color": COLOR_SUP},
+        )
+        for k in range(-2, 3):
+            xk = x + k * size * 0.4
+            fig.add_trace(go.Scatter(
+                x=[xk, xk - size * 0.25], y=[y - size * 0.4, y - size * 0.8],
+                mode="lines", line=dict(color=COLOR_SUP, width=1.2),
+                hoverinfo="skip", showlegend=False,
+            ))
+
+    elif sup_type == "PIN":
+        fig.add_trace(go.Scatter(
+            x=[x, x + w, x - w, x], y=[y, y - h, y - h, y],
+            fill="toself", mode="lines",
+            line={"color": COLOR_SUP, "width": 1.5}, fillcolor=COLOR_SUP,
+            hoverinfo="skip", showlegend=False,
+        ))
+        fig.add_trace(go.Scatter(
+            x=[x - w * 1.3, x + w * 1.3], y=[y - h, y - h],
+            mode="lines", line=dict(color=COLOR_SUP, width=2),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    elif sup_type == "ROLX":  # ngăn chuyển vị đứng, tự do trượt ngang
+        y_top, y_bot, y_floor = y - size * 0.25, y - size * 1.05, y - floor
+        fig.add_trace(go.Scatter(
+            x=[x], y=[y_top], mode="markers",
+            marker=dict(symbol="circle", size=7, color=COLOR_SUP),
+            hoverinfo="skip", showlegend=False,
+        ))
+        fig.add_trace(go.Scatter(
+            x=[x], y=[y_bot], mode="markers",
+            marker=dict(symbol="circle", size=7, color=COLOR_SUP),
+            hoverinfo="skip", showlegend=False,
+        ))
+        fig.add_trace(go.Scatter(
+            x=[x, x], y=[y_top, y_bot], mode="lines",
+            line=dict(color=COLOR_SUP, width=1.5),
+            hoverinfo="skip", showlegend=False,
+        ))
+        fig.add_trace(go.Scatter(
+            x=[x - w, x + w], y=[y_floor, y_floor], mode="lines",
+            line=dict(color=COLOR_SUP, width=2),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    else:  # ROLY: ngăn chuyển vị ngang, tự do trượt đứng (xoay 90° so với ROLX)
+        x_top, x_bot, x_floor = x - size * 0.25, x - size * 1.05, x - floor
+        fig.add_trace(go.Scatter(
+            x=[x_top], y=[y], mode="markers",
+            marker=dict(symbol="circle", size=7, color=COLOR_SUP),
+            hoverinfo="skip", showlegend=False,
+        ))
+        fig.add_trace(go.Scatter(
+            x=[x_bot], y=[y], mode="markers",
+            marker=dict(symbol="circle", size=7, color=COLOR_SUP),
+            hoverinfo="skip", showlegend=False,
+        ))
+        fig.add_trace(go.Scatter(
+            x=[x_top, x_bot], y=[y, y], mode="lines",
+            line=dict(color=COLOR_SUP, width=1.5),
+            hoverinfo="skip", showlegend=False,
+        ))
+        fig.add_trace(go.Scatter(
+            x=[x_floor, x_floor], y=[y - w, y + w], mode="lines",
+            line=dict(color=COLOR_SUP, width=2),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+
 def _pf_geometry_plot(
     df_nodes: pd.DataFrame,
     df_el: pd.DataFrame,
@@ -3765,6 +3875,12 @@ def _pf_geometry_plot(
 
         if "node" in supports.columns:
 
+            # Kích thước ký hiệu gối tỷ lệ theo bao hình học của khung,
+            # cùng cách tính với _cb_draw_base_beam_and_supports để đồng bộ
+            x_span_sup = float(nodes["x (m)"].max() - nodes["x (m)"].min()) if len(nodes) else 0.0
+            y_span_sup = float(nodes["y (m)"].max() - nodes["y (m)"].min()) if len(nodes) else 0.0
+            sup_size = max(max(x_span_sup, y_span_sup) * 0.035, 0.25)
+
             for _, row in supports.iterrows():
 
                 try:
@@ -3784,24 +3900,8 @@ def _pf_geometry_plot(
                         nodes.loc[node_id, "y (m)"]
                     )
 
-                    fig.add_trace(
-                        go.Scatter(
-                            x=[x],
-                            y=[y],
-                            mode="markers",
-                            marker=dict(
-                                symbol="triangle-up",
-                                size=15,
-                                color=COLOR_SUP,
-                            ),
-                            name="Support",
-                            hovertemplate=(
-                                f"Support at Node {node_id}"
-                                "<extra></extra>"
-                            ),
-                            showlegend=False,
-                        )
-                    )
+                    sup_type = _pf_support_type(row)
+                    draw_support_pf(fig, x, y, sup_type, sup_size)
 
                 except (
                     TypeError,
@@ -4056,18 +4156,19 @@ def _pf_frame_diagram(
                 continue
 
     if df_sup is not None and not df_sup.empty and "node" in df_sup.columns:
+        # Kích thước ký hiệu gối đồng bộ với _pf_geometry_plot / các tab dầm
+        x_span_sup = float(nodes["x (m)"].max() - nodes["x (m)"].min()) if len(nodes) else 0.0
+        y_span_sup = float(nodes["y (m)"].max() - nodes["y (m)"].min()) if len(nodes) else 0.0
+        sup_size = max(max(x_span_sup, y_span_sup) * 0.035, 0.25)
+
         for _, row in df_sup.iterrows():
             try:
                 node_id = int(row["node"])
                 if node_id < 0 or node_id >= len(nodes):
                     continue
                 x = float(nodes.loc[node_id, "x (m)"]); y = float(nodes.loc[node_id, "y (m)"])
-                fig.add_trace(go.Scatter(
-                    x=[x], y=[y], mode="markers",
-                    marker=dict(symbol="triangle-up", size=15, color=COLOR_SUP,
-                                line=dict(color="#ffffff", width=1.5)),
-                    hoverinfo="skip", showlegend=False,
-                ))
+                sup_type = _pf_support_type(row)
+                draw_support_pf(fig, x, y, sup_type, sup_size)
             except (TypeError, ValueError, KeyError, IndexError):
                 continue
 
