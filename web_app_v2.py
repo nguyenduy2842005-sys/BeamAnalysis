@@ -3066,7 +3066,208 @@ def _pf_geometry_plot(
     )
 
     return fig
+def _pf_diagram_plot(
+    result_pf,
+    diagram_type: str,
+    title: str,
+) -> go.Figure:
+    """
+    Vẽ biểu đồ nội lực cho Plane Frame.
 
+    diagram_type:
+        - "moment" : BMD
+        - "shear"  : SFD
+        - "axial"  : AFD
+    """
+
+    fig = go.Figure()
+
+    # ==========================================================
+    # 1. KIỂM TRA RESULT
+    # ==========================================================
+
+    if result_pf is None:
+        fig.update_layout(
+            title=f"{title} — Chưa có kết quả",
+            template="plotly_white",
+            height=500,
+        )
+        return fig
+
+    element_results = getattr(
+        result_pf,
+        "element_results",
+        None,
+    )
+
+    if not element_results:
+        fig.update_layout(
+            title=f"{title} — Không có dữ liệu",
+            template="plotly_white",
+            height=500,
+        )
+        return fig
+
+    # ==========================================================
+    # 2. XÁC ĐỊNH DỮ LIỆU CẦN VẼ
+    # ==========================================================
+
+    diagram_type = str(
+        diagram_type
+    ).strip().lower()
+
+    if diagram_type == "moment":
+
+        data_attr = "moment"
+        y_title = "Moment (kNm)"
+
+    elif diagram_type == "shear":
+
+        data_attr = "shear"
+        y_title = "Shear Force (kN)"
+
+    elif diagram_type == "axial":
+
+        data_attr = "axial"
+        y_title = "Axial Force (kN)"
+
+    else:
+
+        fig.update_layout(
+            title=f"{title} — Loại biểu đồ không hợp lệ",
+            template="plotly_white",
+            height=500,
+        )
+
+        return fig
+
+    # ==========================================================
+    # 3. VẼ TỪNG ELEMENT
+    # ==========================================================
+
+    has_data = False
+
+    for e_id, element_result in enumerate(
+        element_results
+    ):
+
+        values = getattr(
+            element_result,
+            data_attr,
+            None,
+        )
+
+        if values is None:
+            continue
+
+        try:
+
+            values = np.asarray(
+                values,
+                dtype=float,
+            ).flatten()
+
+        except Exception:
+            continue
+
+        if values.size == 0:
+            continue
+
+        has_data = True
+
+        # ------------------------------------------------------
+        # Trục x nội bộ của phần tử
+        # ------------------------------------------------------
+
+        x = np.linspace(
+            0.0,
+            1.0,
+            len(values),
+        )
+
+        # ------------------------------------------------------
+        # Đường biểu đồ
+        # ------------------------------------------------------
+
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=values,
+                mode="lines+markers",
+                name=f"Element {e_id}",
+                line=dict(
+                    width=3,
+                ),
+                marker=dict(
+                    size=5,
+                ),
+                hovertemplate=(
+                    f"Element {e_id}"
+                    "<br>ξ = %{x:.3f}"
+                    f"<br>{y_title} = %{{y:.3f}}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+        # ------------------------------------------------------
+        # Đường chuẩn 0
+        # ------------------------------------------------------
+
+        fig.add_hline(
+            y=0.0,
+            line_width=1,
+            line_dash="dash",
+        )
+
+    # ==========================================================
+    # 4. TRƯỜNG HỢP KHÔNG CÓ DỮ LIỆU
+    # ==========================================================
+
+    if not has_data:
+
+        fig.add_annotation(
+            text=(
+                "Không tìm thấy dữ liệu "
+                f"{diagram_type} trong kết quả FEM."
+            ),
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(
+                size=14,
+            ),
+        )
+
+    # ==========================================================
+    # 5. LAYOUT
+    # ==========================================================
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Normalized Element Coordinate",
+        yaxis_title=y_title,
+        template="plotly_white",
+        height=500,
+        margin=dict(
+            l=60,
+            r=30,
+            t=60,
+            b=50,
+        ),
+        hovermode="closest",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+        ),
+    )
+
+    return fig
 
 # ══════════════════════════════════════════════════════
 #  MAIN RUNNER
