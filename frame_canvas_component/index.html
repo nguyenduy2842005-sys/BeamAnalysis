@@ -346,7 +346,7 @@
       return { node: parseInt(idx, 10), ux: b.ux, uy: b.uy, rz: b.rz };
     });
     const value = { nodes: nodes, elements: elements, supports: supports };
-    window.parent.postMessage({ type: "streamlit:setComponentValue", value: value, dataType: "json" }, "*");
+    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setComponentValue", value: value, dataType: "json" }, "*");
   }
 
   // ---------- view controls ----------
@@ -469,7 +469,7 @@
   }
   function setFrameHeight() {
     const total = document.body.scrollHeight + 12;
-    window.parent.postMessage({ type: "streamlit:setFrameHeight", height: total }, "*");
+    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: total }, "*");
   }
   window.addEventListener("resize", resize);
 
@@ -505,7 +505,7 @@
   });
 
   resize();
-  window.parent.postMessage({ type: "streamlit:componentReady", apiVersion: 1 }, "*");
+  window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
 })();
 </script>
 </body>
