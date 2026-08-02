@@ -2757,6 +2757,316 @@ def render_plane_frame() -> None:
             "plane_frame",
             figures=figures
         )
+def _pf_geometry_plot(
+    df_nodes: pd.DataFrame,
+    df_el: pd.DataFrame,
+    df_sup: pd.DataFrame,
+    result_pf=None,
+) -> go.Figure:
+    """
+    Vẽ hình học khung phẳng 2D.
+
+    Parameters
+    ----------
+    df_nodes : DataFrame
+        Bảng Nodes gồm:
+        - x (m)
+        - y (m)
+
+    df_el : DataFrame
+        Bảng Elements gồm:
+        - i
+        - j
+
+    df_sup : DataFrame
+        Bảng Supports gồm:
+        - node
+        - ux
+        - uy
+        - rz
+
+    result_pf : PlaneFrameResult, optional
+        Kết quả FEM. Hiện tại dùng để giữ tương thích
+        với giao diện và có thể mở rộng sau này.
+    """
+
+    fig = go.Figure()
+
+    # ==========================================================
+    # 1. KIỂM TRA DỮ LIỆU NODES
+    # ==========================================================
+
+    if df_nodes is None or df_nodes.empty:
+        fig.update_layout(
+            title="Plane Frame Geometry",
+            xaxis_title="X (m)",
+            yaxis_title="Y (m)",
+            template="plotly_white",
+        )
+        return fig
+
+    nodes = df_nodes.copy()
+
+    # Đảm bảo tên cột tồn tại
+    required_node_cols = ["x (m)", "y (m)"]
+
+    if not all(c in nodes.columns for c in required_node_cols):
+        fig.update_layout(
+            title="Plane Frame Geometry — Invalid Node Data",
+            template="plotly_white",
+        )
+        return fig
+
+    # Ép kiểu số
+    nodes["x (m)"] = pd.to_numeric(
+        nodes["x (m)"],
+        errors="coerce"
+    )
+
+    nodes["y (m)"] = pd.to_numeric(
+        nodes["y (m)"],
+        errors="coerce"
+    )
+
+    nodes = nodes.dropna(
+        subset=["x (m)", "y (m)"]
+    ).reset_index(drop=True)
+
+    # ==========================================================
+    # 2. VẼ ELEMENTS
+    # ==========================================================
+
+    if df_el is not None and not df_el.empty:
+
+        elements = df_el.copy()
+
+        if "i" in elements.columns and "j" in elements.columns:
+
+            for _, row in elements.iterrows():
+
+                try:
+                    i = int(row["i"])
+                    j = int(row["j"])
+
+                    if (
+                        i < 0
+                        or j < 0
+                        or i >= len(nodes)
+                        or j >= len(nodes)
+                    ):
+                        continue
+
+                    xi = float(nodes.loc[i, "x (m)"])
+                    yi = float(nodes.loc[i, "y (m)"])
+
+                    xj = float(nodes.loc[j, "x (m)"])
+                    yj = float(nodes.loc[j, "y (m)"])
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[xi, xj],
+                            y=[yi, yj],
+                            mode="lines",
+                            line=dict(
+                                color="#1f77b4",
+                                width=4,
+                            ),
+                            hovertemplate=(
+                                f"Element: {i} → {j}"
+                                "<br>X: %{x:.3f} m"
+                                "<br>Y: %{y:.3f} m"
+                                "<extra></extra>"
+                            ),
+                            showlegend=False,
+                        )
+                    )
+
+                except (
+                    TypeError,
+                    ValueError,
+                    KeyError,
+                    IndexError,
+                ):
+                    continue
+
+    # ==========================================================
+    # 3. VẼ NODES
+    # ==========================================================
+
+    fig.add_trace(
+        go.Scatter(
+            x=nodes["x (m)"],
+            y=nodes["y (m)"],
+            mode="markers+text",
+            text=[
+                f"N{i}"
+                for i in range(len(nodes))
+            ],
+            textposition="top center",
+            marker=dict(
+                size=10,
+                color="#ffffff",
+                line=dict(
+                    color="#1f77b4",
+                    width=2,
+                ),
+            ),
+            name="Nodes",
+            hovertemplate=(
+                "Node: %{text}"
+                "<br>X: %{x:.3f} m"
+                "<br>Y: %{y:.3f} m"
+                "<extra></extra>"
+            ),
+        )
+    )
+
+    # ==========================================================
+    # 4. VẼ GỐI TỰA
+    # ==========================================================
+
+    if df_sup is not None and not df_sup.empty:
+
+        supports = df_sup.copy()
+
+        if "node" in supports.columns:
+
+            for _, row in supports.iterrows():
+
+                try:
+                    node_id = int(row["node"])
+
+                    if (
+                        node_id < 0
+                        or node_id >= len(nodes)
+                    ):
+                        continue
+
+                    x = float(
+                        nodes.loc[node_id, "x (m)"]
+                    )
+
+                    y = float(
+                        nodes.loc[node_id, "y (m)"]
+                    )
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[x],
+                            y=[y],
+                            mode="markers",
+                            marker=dict(
+                                symbol="triangle-up",
+                                size=14,
+                                color="#d62728",
+                            ),
+                            name="Support",
+                            hovertemplate=(
+                                f"Support at Node {node_id}"
+                                "<extra></extra>"
+                            ),
+                            showlegend=False,
+                        )
+                    )
+
+                except (
+                    TypeError,
+                    ValueError,
+                    KeyError,
+                    IndexError,
+                ):
+                    continue
+
+    # ==========================================================
+    # 5. ĐÁNH SỐ ELEMENT
+    # ==========================================================
+
+    if df_el is not None and not df_el.empty:
+
+        elements = df_el.copy()
+
+        if "i" in elements.columns and "j" in elements.columns:
+
+            for e_id, row in elements.iterrows():
+
+                try:
+                    i = int(row["i"])
+                    j = int(row["j"])
+
+                    if (
+                        i < 0
+                        or j < 0
+                        or i >= len(nodes)
+                        or j >= len(nodes)
+                    ):
+                        continue
+
+                    xi = float(nodes.loc[i, "x (m)"])
+                    yi = float(nodes.loc[i, "y (m)"])
+
+                    xj = float(nodes.loc[j, "x (m)"])
+                    yj = float(nodes.loc[j, "y (m)"])
+
+                    xm = (xi + xj) / 2
+                    ym = (yi + yj) / 2
+
+                    fig.add_annotation(
+                        x=xm,
+                        y=ym,
+                        text=f"E{e_id}",
+                        showarrow=False,
+                        font=dict(
+                            size=11,
+                            color="#111111",
+                        ),
+                        bgcolor="rgba(255,255,255,0.7)",
+                    )
+
+                except (
+                    TypeError,
+                    ValueError,
+                    KeyError,
+                    IndexError,
+                ):
+                    continue
+
+    # ==========================================================
+    # 6. LAYOUT
+    # ==========================================================
+
+    fig.update_layout(
+        title="Plane Frame Geometry",
+        xaxis_title="X (m)",
+        yaxis_title="Y (m)",
+        template="plotly_white",
+        height=500,
+        margin=dict(
+            l=50,
+            r=30,
+            t=60,
+            b=50,
+        ),
+        xaxis=dict(
+            zeroline=True,
+            showgrid=True,
+        ),
+        yaxis=dict(
+            zeroline=True,
+            showgrid=True,
+            scaleanchor="x",
+            scaleratio=1,
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+        ),
+    )
+
+    return fig
+
 
 # ══════════════════════════════════════════════════════
 #  MAIN RUNNER
