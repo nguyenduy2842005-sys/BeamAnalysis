@@ -327,26 +327,23 @@ def clean_rows(df: pd.DataFrame, columns: Iterable[str]) -> list[tuple[float, ..
 def safe_data_editor(
     widget_key: str,
     default_df: pd.DataFrame,
-    **editor_kwargs,
+    **editor_kwargs
 ) -> pd.DataFrame:
-    """
-    Hiển thị Data Editor và giữ dữ liệu sau mỗi lần rerun.
-    Không thực hiện validation trong hàm này.
-    """
 
-    if widget_key not in st.session_state:
-        st.session_state[widget_key] = default_df.copy()
+    data_key = f"{widget_key}__data"
+
+    if data_key not in st.session_state:
+        st.session_state[data_key] = default_df.copy()
 
     edited_df = st.data_editor(
-        st.session_state[widget_key],
+        st.session_state[data_key],
         key=widget_key,
         **editor_kwargs,
     )
 
-    st.session_state[widget_key] = edited_df.copy()
+    st.session_state[data_key] = edited_df.copy()
 
     return edited_df
-
     # Hiển thị Data Editor
     edited_df = st.data_editor(
         st.session_state[seed_key],
