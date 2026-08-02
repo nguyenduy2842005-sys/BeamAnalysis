@@ -400,13 +400,13 @@ def pf_set_table(widget_key: str, new_df: pd.DataFrame) -> None:
 
 # ══════════════════════════════════════════════════════
 #  COMPONENT: VẼ KHUNG PHẲNG BẰNG CHUỘT (kéo-thả tạo thanh)
-#  -> Sinh file tĩnh ngay lúc runtime để KHÔNG phụ thuộc vào
-#     việc file có được commit/deploy đúng chỗ trên Cloud hay không.
+#  -> Phục vụ qua CDN (jsDelivr, mirror trực tiếp từ GitHub repo) thay vì
+#     để Streamlit Cloud tự serve static file — tránh timeout/chập chờn
+#     khi qua proxy nội bộ của Streamlit Community Cloud.
 # ══════════════════════════════════════════════════════
-import tempfile
-
-_SRC_HTML_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "frame_canvas_component", "index.html"
+_frame_canvas_component = components.declare_component(
+    "frame_canvas",
+    url="https://cdn.jsdelivr.net/gh/nguyenduy2842005-sys/BeamAnalysis@main/frame_canvas_component/index.html",
 )
 
 @st.cache_resource
