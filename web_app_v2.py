@@ -400,13 +400,27 @@ def pf_set_table(widget_key: str, new_df: pd.DataFrame) -> None:
 
 # ══════════════════════════════════════════════════════
 #  COMPONENT: VẼ KHUNG PHẲNG BẰNG CHUỘT (kéo-thả tạo thanh)
+#  -> Sinh file tĩnh ngay lúc runtime để KHÔNG phụ thuộc vào
+#     việc file có được commit/deploy đúng chỗ trên Cloud hay không.
 # ══════════════════════════════════════════════════════
-_FRAME_CANVAS_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "frame_canvas_component"
+import tempfile
+
+_SRC_HTML_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "frame_canvas_component", "index.html"
 )
-_frame_canvas_component = components.declare_component(
-    "frame_canvas", path=_FRAME_CANVAS_DIR
-)
+
+@st.cache_resource
+def _get_frame_canvas_component():
+    with open(_SRC_HTML_PATH, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    tmp_dir = tempfile.mkdtemp(prefix="frame_canvas_")
+    with open(os.path.join(tmp_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+    return components.declare_component("frame_canvas", path=tmp_dir)
+
+_frame_canvas_component = _get_frame_canvas_component()
 
 
 def frame_canvas(nodes, elements, supports, snap: float = 0.5,
