@@ -2906,10 +2906,10 @@ def render_plane_frame() -> None:
     with left:
         a, b = st.columns(2)
         with a: st.plotly_chart(_pf_geometry_plot(df_nodes, df_el, df_sup, result_pf, df_nload), use_container_width=True)
-        with b: st.plotly_chart(_pf_diagram_plot(result_pf, "moment", "BMD"), use_container_width=True)
+        with b: st.plotly_chart(_pf_frame_diagram(df_nodes, df_el, df_sup, result_pf, "moment", "BMD (kNm)"), use_container_width=True)
         c, d = st.columns(2)
-        with c: st.plotly_chart(_pf_diagram_plot(result_pf, "shear", "SFD"), use_container_width=True)
-        with d: st.plotly_chart(_pf_diagram_plot(result_pf, "axial", "AFD"), use_container_width=True)
+        with c: st.plotly_chart(_pf_frame_diagram(df_nodes, df_el, df_sup, result_pf, "shear", "SFD (kN)"), use_container_width=True)
+        with d: st.plotly_chart(_pf_frame_diagram(df_nodes, df_el, df_sup, result_pf, "axial", "AFD (kN)"), use_container_width=True)
     with right:
 
         figures = []
@@ -2923,22 +2923,22 @@ def render_plane_frame() -> None:
                 df_nload,
             )
 
-            fig_bmd = _pf_diagram_plot(
-                result_pf,
+            fig_bmd = _pf_frame_diagram(
+                df_nodes, df_el, df_sup, result_pf,
                 "moment",
-                "BMD"
+                "BMD (kNm)",
             )
 
-            fig_sfd = _pf_diagram_plot(
-                result_pf,
+            fig_sfd = _pf_frame_diagram(
+                df_nodes, df_el, df_sup, result_pf,
                 "shear",
-                "SFD"
+                "SFD (kN)",
             )
 
-            fig_afd = _pf_diagram_plot(
-                result_pf,
+            fig_afd = _pf_frame_diagram(
+                df_nodes, df_el, df_sup, result_pf,
                 "axial",
-                "AFD"
+                "AFD (kN)",
             )
 
             figures.extend([
@@ -3358,205 +3358,218 @@ def _pf_geometry_plot(
     )
 
     return fig
-def _pf_diagram_plot(
+def _pf_frame_diagram(
+    df_nodes: pd.DataFrame,
+    df_el: pd.DataFrame,
+    df_sup: pd.DataFrame,
     result_pf,
     diagram_type: str,
     title: str,
 ) -> go.Figure:
     """
-    Vẽ biểu đồ nội lực cho Plane Frame.
+    Ve noi luc (M/V/N) TRUC TIEP TREN HINH KHUNG PHANG - dung phong cach
+    phan mem ket cau chuyen dung (SAP2000/ETABS/RDM...): duong bieu do
+    duoc ve vuong goc voi truc thanh, lech sang mot ben theo dau gia tri,
+    co gach hatch va ghi tri so tai 2 dau + diem cuc tri, thay vi ve theo
+    truc hoanh/tung do rieng (khong con "Normalized Element Coordinate").
 
-    diagram_type:
-        - "moment" : BMD
-        - "shear"  : SFD
-        - "axial"  : AFD
+    Quy uoc: chieu lech (ben nao cua thanh) chi phan anh DAU cua gia tri
+    noi luc theo he truc cuc bo cua phan tu trong lien ket voi solver hien
+    tai — chua doi chieu theo "tho chiu keo" nhu quy uoc ve tay truyen
+    thong. Tri so tuyet doi va vi tri cuc tri la chinh xac tu ket qua FEM.
     """
 
     fig = go.Figure()
 
-    # ==========================================================
-    # 1. KIỂM TRA RESULT
-    # ==========================================================
+    diagram_type = str(diagram_type).strip().lower()
+    attr_map = {
+        "moment": ("moment", COLOR_BMD),
+        "shear": ("shear", COLOR_SFD),
+        "axial": ("axial", "#168f2c"),
+    }
+    if diagram_type not in attr_map:
+        fig.update_layout(title=f"{title} — Loại biểu đồ không hợp lệ", template="plotly_white", height=460)
+        return fig
+    data_attr, diag_color = attr_map[diagram_type]
+
+    if df_nodes is None or df_nodes.empty:
+        fig.update_layout(title=title, template="plotly_white", height=460)
+        return fig
+
+    nodes = df_nodes.copy()
+    if not all(c in nodes.columns for c in ["x (m)", "y (m)"]):
+        fig.update_layout(title=title, template="plotly_white", height=460)
+        return fig
+    nodes["x (m)"] = pd.to_numeric(nodes["x (m)"], errors="coerce")
+    nodes["y (m)"] = pd.to_numeric(nodes["y (m)"], errors="coerce")
+    nodes = nodes.dropna(subset=["x (m)", "y (m)"]).reset_index(drop=True)
+
+    # ---------------------------------------------------------------
+    # 1. VE KHUNG NEN (net manh, mau xam den) lam khung tham chieu
+    # ---------------------------------------------------------------
+    if df_el is not None and not df_el.empty and "i" in df_el.columns and "j" in df_el.columns:
+        for _, row in df_el.iterrows():
+            try:
+                i, j = int(row["i"]), int(row["j"])
+                if i < 0 or j < 0 or i >= len(nodes) or j >= len(nodes):
+                    continue
+                xi, yi = float(nodes.loc[i, "x (m)"]), float(nodes.loc[i, "y (m)"])
+                xj, yj = float(nodes.loc[j, "x (m)"]), float(nodes.loc[j, "y (m)"])
+                fig.add_trace(go.Scatter(
+                    x=[xi, xj], y=[yi, yj], mode="lines",
+                    line=dict(color="#2b2b2b", width=3),
+                    hoverinfo="skip", showlegend=False,
+                ))
+            except (TypeError, ValueError, KeyError, IndexError):
+                continue
+
+    if df_sup is not None and not df_sup.empty and "node" in df_sup.columns:
+        for _, row in df_sup.iterrows():
+            try:
+                node_id = int(row["node"])
+                if node_id < 0 or node_id >= len(nodes):
+                    continue
+                x = float(nodes.loc[node_id, "x (m)"]); y = float(nodes.loc[node_id, "y (m)"])
+                fig.add_trace(go.Scatter(
+                    x=[x], y=[y], mode="markers",
+                    marker=dict(symbol="triangle-up", size=12, color="#d62728"),
+                    hoverinfo="skip", showlegend=False,
+                ))
+            except (TypeError, ValueError, KeyError, IndexError):
+                continue
 
     if result_pf is None:
         fig.update_layout(
-            title=f"{title} — Chưa có kết quả",
-            template="plotly_white",
-            height=500,
+            title=f"{title} — Chưa có kết quả", template="plotly_white", height=460,
+            xaxis_title="X (m)", yaxis_title="Y (m)",
+            yaxis=dict(scaleanchor="x", scaleratio=1),
         )
         return fig
 
-    element_results = getattr(
-        result_pf,
-        "element_results",
-        None,
-    )
-
+    element_results = getattr(result_pf, "element_results", None)
     if not element_results:
         fig.update_layout(
-            title=f"{title} — Không có dữ liệu",
-            template="plotly_white",
-            height=500,
+            title=f"{title} — Không có dữ liệu", template="plotly_white", height=460,
+            xaxis_title="X (m)", yaxis_title="Y (m)",
+            yaxis=dict(scaleanchor="x", scaleratio=1),
         )
         return fig
 
-    # ==========================================================
-    # 2. XÁC ĐỊNH DỮ LIỆU CẦN VẼ
-    # ==========================================================
-
-    diagram_type = str(
-        diagram_type
-    ).strip().lower()
-
-    if diagram_type == "moment":
-
-        data_attr = "moment"
-        y_title = "Moment (kNm)"
-
-    elif diagram_type == "shear":
-
-        data_attr = "shear"
-        y_title = "Shear Force (kN)"
-
-    elif diagram_type == "axial":
-
-        data_attr = "axial"
-        y_title = "Axial Force (kN)"
-
-    else:
-
-        fig.update_layout(
-            title=f"{title} — Loại biểu đồ không hợp lệ",
-            template="plotly_white",
-            height=500,
-        )
-
-        return fig
-
-    # ==========================================================
-    # 3. VẼ TỪNG ELEMENT
-    # ==========================================================
-
-    has_data = False
-
-    for e_id, element_result in enumerate(
-        element_results
-    ):
-
-        values = getattr(
-            element_result,
-            data_attr,
-            None,
-        )
-
-        if values is None:
+    # ---------------------------------------------------------------
+    # 2. TIM HE SO TY LE CHUNG (dung 1 ty le cho toan bo khung, giong
+    #    cach cac phan mem ket cau ve dong bo giua cac phan tu)
+    # ---------------------------------------------------------------
+    all_vals = []
+    for er in element_results:
+        v = getattr(er, data_attr, None)
+        if v is None:
             continue
-
         try:
-
-            values = np.asarray(
-                values,
-                dtype=float,
-            ).flatten()
-
+            v = np.asarray(v, dtype=float).flatten()
         except Exception:
             continue
+        if v.size:
+            all_vals.append(v)
 
-        if values.size == 0:
+    if not all_vals:
+        fig.add_annotation(text=f"Không tìm thấy dữ liệu {diagram_type} trong kết quả FEM.",
+                            x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False, font=dict(size=13))
+        fig.update_layout(title=title, template="plotly_white", height=460)
+        return fig
+
+    max_abs = max(float(np.max(np.abs(v))) for v in all_vals)
+
+    x_span = float(nodes["x (m)"].max() - nodes["x (m)"].min()) if len(nodes) else 0.0
+    y_span = float(nodes["y (m)"].max() - nodes["y (m)"].min()) if len(nodes) else 0.0
+    frame_extent = max(x_span, y_span, 1.0)
+    scale = (frame_extent * 0.22 / max_abs) if max_abs > 1e-9 else 0.0
+
+    # ---------------------------------------------------------------
+    # 3. VE BIEU DO NOI LUC LECH VUONG GOC TRUC THANH (hatch + duong bao)
+    # ---------------------------------------------------------------
+    hatch_x, hatch_y = [], []
+    ann_seen = set()
+
+    for e_id, er in enumerate(element_results):
+        values = getattr(er, data_attr, None)
+        xg = getattr(er, "x_coords", None)
+        yg = getattr(er, "y_coords", None)
+        if values is None or xg is None or yg is None:
             continue
+        try:
+            values = np.asarray(values, dtype=float).flatten()
+            xg = np.asarray(xg, dtype=float).flatten()
+            yg = np.asarray(yg, dtype=float).flatten()
+        except Exception:
+            continue
+        n = min(len(values), len(xg), len(yg))
+        if n < 2:
+            continue
+        values, xg, yg = values[:n], xg[:n], yg[:n]
 
-        has_data = True
+        dx, dy = xg[-1] - xg[0], yg[-1] - yg[0]
+        L = math.hypot(dx, dy)
+        if L < 1e-9:
+            continue
+        tx, ty = dx / L, dy / L
+        nx, ny = -ty, tx  # phap tuyen, quay 90 deg nguoc kim dong ho tu truc doc thanh
 
-        # ------------------------------------------------------
-        # Trục x nội bộ của phần tử
-        # ------------------------------------------------------
+        ox = xg + values * scale * nx
+        oy = yg + values * scale * ny
 
-        x = np.linspace(
-            0.0,
-            1.0,
-            len(values),
-        )
+        for k in range(n):
+            hatch_x.extend([xg[k], ox[k], None])
+            hatch_y.extend([yg[k], oy[k], None])
 
-        # ------------------------------------------------------
-        # Đường biểu đồ
-        # ------------------------------------------------------
+        fig.add_trace(go.Scatter(
+            x=ox, y=oy, mode="lines",
+            line=dict(color=diag_color, width=2.4),
+            name=f"E{e_id}",
+            hovertemplate=f"E{e_id}<br>{title} = %{{customdata:.3f}}<extra></extra>",
+            customdata=values,
+            showlegend=False,
+        ))
 
-        fig.add_trace(
-            go.Scatter(
-                x=x,
-                y=values,
-                mode="lines+markers",
-                name=f"Element {e_id}",
-                line=dict(
-                    width=3,
-                ),
-                marker=dict(
-                    size=5,
-                ),
-                hovertemplate=(
-                    f"Element {e_id}"
-                    "<br>ξ = %{x:.3f}"
-                    f"<br>{y_title} = %{{y:.3f}}"
-                    "<extra></extra>"
-                ),
+        # Nhan tri so tai 2 dau phan tu (tranh trung lap qua nhieu tai cung 1 node)
+        for k, label_pos in [(0, "start"), (n - 1, "end")]:
+            key = (round(xg[k], 4), round(yg[k], 4), round(values[k], 4))
+            if key in ann_seen:
+                continue
+            ann_seen.add(key)
+            if abs(values[k]) < 1e-6:
+                continue
+            fig.add_annotation(
+                x=ox[k], y=oy[k], text=f"{values[k]:.3g}",
+                showarrow=False, font=dict(size=10, color=diag_color),
+                bgcolor="rgba(255,255,255,0.75)",
             )
-        )
 
-        # ------------------------------------------------------
-        # Đường chuẩn 0
-        # ------------------------------------------------------
+        # Nhan gia tri cuc tri trong long phan tu (khong phai 2 dau)
+        idx_ext = int(np.argmax(np.abs(values)))
+        if 0 < idx_ext < n - 1 and abs(values[idx_ext]) > 1e-6:
+            fig.add_annotation(
+                x=ox[idx_ext], y=oy[idx_ext], text=f"{values[idx_ext]:.3g}",
+                showarrow=False, font=dict(size=10, color=diag_color),
+                bgcolor="rgba(255,255,255,0.75)",
+            )
 
-        fig.add_hline(
-            y=0.0,
-            line_width=1,
-            line_dash="dash",
-        )
-
-    # ==========================================================
-    # 4. TRƯỜNG HỢP KHÔNG CÓ DỮ LIỆU
-    # ==========================================================
-
-    if not has_data:
-
-        fig.add_annotation(
-            text=(
-                "Không tìm thấy dữ liệu "
-                f"{diagram_type} trong kết quả FEM."
-            ),
-            x=0.5,
-            y=0.5,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            font=dict(
-                size=14,
-            ),
-        )
-
-    # ==========================================================
-    # 5. LAYOUT
-    # ==========================================================
+    if hatch_x:
+        fig.add_trace(go.Scatter(
+            x=hatch_x, y=hatch_y, mode="lines",
+            line=dict(color=diag_color, width=0.8),
+            opacity=0.55, hoverinfo="skip", showlegend=False,
+        ))
 
     fig.update_layout(
         title=title,
-        xaxis_title="Normalized Element Coordinate",
-        yaxis_title=y_title,
+        xaxis_title="X (m)",
+        yaxis_title="Y (m)",
         template="plotly_white",
-        height=500,
-        margin=dict(
-            l=60,
-            r=30,
-            t=60,
-            b=50,
-        ),
-        hovermode="closest",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="left",
-            x=0,
-        ),
+        height=460,
+        margin=dict(l=50, r=30, t=60, b=50),
+        xaxis=dict(zeroline=True, showgrid=True),
+        yaxis=dict(zeroline=True, showgrid=True, scaleanchor="x", scaleratio=1),
+        showlegend=False,
     )
 
     return fig
