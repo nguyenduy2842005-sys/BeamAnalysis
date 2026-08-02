@@ -9,6 +9,7 @@ Tabs:
 from __future__ import annotations
 
 import io
+import json
 import math
 import os
 import tempfile
@@ -21,6 +22,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 
 from beam_core import BeamInput, BeamResult, solve_beam
@@ -394,6 +396,40 @@ def pf_set_table(widget_key: str, new_df: pd.DataFrame) -> None:
     ver_key = f"{widget_key}__ver"
     st.session_state[data_key] = new_df.copy()
     st.session_state[ver_key] = st.session_state.get(ver_key, 0) + 1
+
+
+# ══════════════════════════════════════════════════════
+#  COMPONENT: VẼ KHUNG PHẲNG BẰNG CHUỘT (kéo-thả tạo thanh)
+# ══════════════════════════════════════════════════════
+_FRAME_CANVAS_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "frame_canvas_component"
+)
+_frame_canvas_component = components.declare_component(
+    "frame_canvas", path=_FRAME_CANVAS_DIR
+)
+
+
+def frame_canvas(nodes, elements, supports, snap: float = 0.5,
+                  reset_token: int = 0, height: int = 560, key: str | None = None):
+    """
+    Canvas HTML/JS cho phép người dùng KÉO CHUỘT từ điểm này sang điểm khác
+    để vẽ trực tiếp một thanh (element) của khung phẳng — tự bắt lưới / bắt
+    vào nút có sẵn gần đó, thay vì phải gõ tay toạ độ + chỉ số i, j vào bảng.
+
+    Trả về dict {"nodes": [...], "elements": [...], "supports": [...]} mỗi khi
+    người dùng thực hiện một thao tác làm thay đổi hình học (vẽ / xoá / di
+    chuyển nút / đổi loại gối), hoặc None nếu chưa có thay đổi nào.
+    """
+    return _frame_canvas_component(
+        nodes=nodes,
+        elements=elements,
+        supports=supports,
+        snap=snap,
+        reset_token=reset_token,
+        height=height,
+        key=key,
+        default=None,
+    )
 
 
 # ---- Thu vien tiet dien don gian (cong thuc hinh hoc chuan, khong tra bang) ----
@@ -2674,19 +2710,94 @@ def render_plane_frame() -> None:
         st.divider()
 
     cfg = {"width": "stretch", "num_rows": "dynamic", "hide_index": True}
-    tab_nd, tab_el, tab_sup, tab_pl_nd, tab_udl = st.tabs(
-        ["🔵 Nodes", "📐 Elements", "🔒 Supports", "⬇️ Node Loads", "📏 Element UDL"])
 
-    with tab_nd:
-        nodes_default = pd.DataFrame({"x (m)": [0.0, 0.0, 5.0, 5.0], "y (m)": [0.0, 4.0, 4.0, 0.0]})
-        df_nodes = safe_data_editor("pf_nd_ed", nodes_default, **cfg)
+    nodes_default = pd.DataFrame({"x (m)": [0.0, 0.0, 5.0, 5.0], "y (m)": [0.0, 4.0, 4.0, 0.0]})
+    elems_default = pd.DataFrame(
+        {"i": [0, 1, 3], "j": [1, 2, 2], "E": [200e6] * 3, "A": [0.01] * 3, "I": [1e-4] * 3,
+         "udl_local": [0.0] * 3})
+    sups_default = pd.DataFrame({"node": [0, 3], "ux": [True, True], "uy": [True, True], "rz": [True, True]})
+
+    tab_draw, tab_el, tab_sup, tab_pl_nd, tab_udl = st.tabs(
+        ["✏️ Vẽ khung", "🧱 Vật liệu & Tiết diện", "🔒 Supports", "⬇️ Node Loads", "📏 Element UDL"])
+
+    with tab_draw:
+        st.caption(
+            "Kéo chuột (hoặc chạm & kéo trên điện thoại/tablet) từ điểm này sang điểm khác để vẽ một thanh — "
+            "hệ thống tự bắt vào lưới hoặc vào nút có sẵn gần đó. Đổi chế độ bằng các nút phía trên canvas: "
+            "**🔒 Gối tựa** (bấm vào nút để đổi loại gối: Ngàm → Khớp → Di động ⊥Y → Di động ⊥X → không gối), "
+            "**↔️ Di chuyển nút** (kéo nút sang vị trí khác), **🗑️ Xoá** (bấm vào nút hoặc thanh cần xoá)."
+        )
+
+        cur_nodes_df = st.session_state.get("pf_nd_ed__data", nodes_default).reset_index(drop=True)
+        cur_el_df_draw = st.session_state.get("pf_el_ed__data", elems_default).reset_index(drop=True)
+        cur_sup_df_draw = st.session_state.get("pf_sup_ed__data", sups_default).reset_index(drop=True)
+
+        init_nodes = [
+            {"x": float(r["x (m)"]), "y": float(r["y (m)"])}
+            for _, r in cur_nodes_df.iterrows()
+            if pd.notna(r.get("x (m)")) and pd.notna(r.get("y (m)"))
+        ]
+        init_elems = [
+            {"i": int(r["i"]), "j": int(r["j"])}
+            for _, r in cur_el_df_draw.iterrows()
+            if pd.notna(r.get("i")) and pd.notna(r.get("j"))
+        ]
+        init_sups = [
+            {"node": int(r["node"]), "ux": bool(r.get("ux", True)), "uy": bool(r.get("uy", True)),
+             "rz": bool(r.get("rz", True))}
+            for _, r in cur_sup_df_draw.iterrows() if pd.notna(r.get("node"))
+        ]
+
+        canvas_result = frame_canvas(
+            nodes=init_nodes, elements=init_elems, supports=init_sups,
+            snap=0.5, reset_token=_get_reset_cnt("pf_"), height=560, key="pf_frame_canvas",
+        )
+
+        if canvas_result is not None:
+            _sig = json.dumps(canvas_result, sort_keys=True)
+            if _sig != st.session_state.get("pf_canvas_last_sig"):
+                st.session_state["pf_canvas_last_sig"] = _sig
+
+                new_nodes_df = pd.DataFrame(
+                    [{"x (m)": n["x"], "y (m)": n["y"]} for n in canvas_result.get("nodes", [])],
+                    columns=["x (m)", "y (m)"],
+                )
+
+                old_props = {
+                    (int(r["i"]), int(r["j"])): (
+                        _safe_num(r.get("E"), 200e6), _safe_num(r.get("A"), 0.01),
+                        _safe_num(r.get("I"), 1e-4), _safe_num(r.get("udl_local"), 0.0),
+                    )
+                    for _, r in cur_el_df_draw.iterrows()
+                    if pd.notna(r.get("i")) and pd.notna(r.get("j"))
+                }
+                new_el_rows = []
+                for e in canvas_result.get("elements", []):
+                    props = old_props.get((e["i"], e["j"])) or old_props.get((e["j"], e["i"]))
+                    E, A, I, udl = props if props else (200e6, 0.01, 1e-4, 0.0)
+                    new_el_rows.append({"i": e["i"], "j": e["j"], "E": E, "A": A, "I": I, "udl_local": udl})
+                new_el_df = pd.DataFrame(new_el_rows, columns=["i", "j", "E", "A", "I", "udl_local"])
+
+                new_sup_df = pd.DataFrame(canvas_result.get("supports", []), columns=["node", "ux", "uy", "rz"])
+
+                pf_set_table("pf_nd_ed", new_nodes_df)
+                pf_set_table("pf_el_ed", new_el_df)
+                pf_set_table("pf_sup_ed", new_sup_df)
+                st.rerun()
+
+        with st.expander("🔢 Nhập / sửa toạ độ nút bằng số (tuỳ chọn, cho ai cần độ chính xác tuyệt đối)",
+                          expanded=False):
+            df_nodes = safe_data_editor("pf_nd_ed", nodes_default, **cfg)
+
+        st.caption(
+            f"Hiện có: **{len(cur_nodes_df.dropna())} nút** · "
+            f"**{len(cur_el_df_draw.dropna(subset=['i']))} thanh** · "
+            f"**{len(cur_sup_df_draw.dropna(subset=['node']))} gối tựa**."
+        )
+
 
     with tab_el:
-        elems_default = pd.DataFrame(
-            {"i": [0, 1, 3], "j": [1, 2, 2], "E": [200e6] * 3, "A": [0.01] * 3, "I": [1e-4] * 3,
-             "udl_local": [0.0] * 3})
-
-        # Tham chiếu nhanh toạ độ node — đỡ phải lật qua tab Nodes khi khai báo i, j
+        # Tham chiếu nhanh toạ độ node — đỡ phải lật qua tab Vẽ khung khi kiểm tra i, j
         if df_nodes is not None and not df_nodes.empty:
             node_ref = " · ".join(
                 f"N{idx}=({r['x (m)']:.2f}, {r['y (m)']:.2f})"
@@ -2784,7 +2895,7 @@ def render_plane_frame() -> None:
                    "panel phía trên chỉ là cách gán nhanh E, A, I, không bắt buộc phải dùng.")
 
     with tab_sup:
-        sups_default = pd.DataFrame({"node": [0, 3], "ux": [True, True], "uy": [True, True], "rz": [True, True]})
+        st.caption("Bảng gối tựa — được gán nhanh từ chế độ 🔒 Gối tựa trên canvas, có thể tinh chỉnh trực tiếp ở đây.")
         df_sup = safe_data_editor("pf_sup_ed", sups_default, **cfg)
 
     with tab_pl_nd:
@@ -3071,7 +3182,7 @@ def _pf_geometry_plot(
                             mode="lines",
                             line=dict(
                                 color="#1f77b4",
-                                width=6,
+                                width=4,
                             ),
                             hovertemplate=(
                                 f"Element: {i} → {j}"
@@ -3105,13 +3216,13 @@ def _pf_geometry_plot(
                 for i in range(len(nodes))
             ],
             textposition="top center",
-            textfont=dict(size=15, color="#ffffff"),
+            textfont=dict(size=12, color="#ffffff"),
             marker=dict(
-                size=13,
+                size=10,
                 color="#ffffff",
                 line=dict(
                     color="#1f77b4",
-                    width=3,
+                    width=2,
                 ),
             ),
             name="Nodes",
@@ -3160,8 +3271,8 @@ def _pf_geometry_plot(
                             mode="markers",
                             marker=dict(
                                 symbol="triangle-up",
-                                size=20,
-                                color="#d62728",
+                                size=15,
+                                color=COLOR_SUP,
                             ),
                             name="Support",
                             hovertemplate=(
@@ -3219,7 +3330,7 @@ def _pf_geometry_plot(
                         text=f"E{e_id}",
                         showarrow=False,
                         font=dict(
-                            size=14,
+                            size=12,
                             color="#111111",
                         ),
                         bgcolor="rgba(255,255,255,0.75)",
@@ -3275,15 +3386,15 @@ def _pf_geometry_plot(
                         ax=x0 - sign * L_arrow, ay=y0,
                         axref="x", ayref="y",
                         showarrow=True,
-                        arrowhead=3, arrowsize=1.3, arrowwidth=3.2,
-                        arrowcolor="#e67300",
+                        arrowhead=3, arrowsize=1.1, arrowwidth=2.2,
+                        arrowcolor=COLOR_SFD,
                         text="",
                     )
                     fig.add_annotation(
                         x=x0 - sign * L_arrow, y=y0,
                         text=f"Fx={fx:g} kN",
                         showarrow=False,
-                        font=dict(size=13, color="#e67300"),
+                        font=dict(size=11, color=COLOR_SFD),
                         bgcolor="rgba(255,255,255,0.8)",
                         yshift=12,
                     )
@@ -3295,15 +3406,15 @@ def _pf_geometry_plot(
                         ax=x0, ay=y0 - sign * L_arrow,
                         axref="x", ayref="y",
                         showarrow=True,
-                        arrowhead=3, arrowsize=1.3, arrowwidth=3.2,
-                        arrowcolor="#e67300",
+                        arrowhead=3, arrowsize=1.1, arrowwidth=2.2,
+                        arrowcolor=COLOR_SFD,
                         text="",
                     )
                     fig.add_annotation(
                         x=x0, y=y0 - sign * L_arrow,
                         text=f"Fy={fy:g} kN",
                         showarrow=False,
-                        font=dict(size=13, color="#e67300"),
+                        font=dict(size=11, color=COLOR_SFD),
                         bgcolor="rgba(255,255,255,0.8)",
                         xshift=32,
                     )
@@ -3314,7 +3425,7 @@ def _pf_geometry_plot(
                         x=x0, y=y0,
                         text=f"{symbol} Mz={mz:g} kNm",
                         showarrow=False,
-                        font=dict(size=13, color="#8e44ad"),
+                        font=dict(size=11, color="#ff2b8a"),
                         bgcolor="rgba(255,255,255,0.8)",
                         xshift=-6,
                         yshift=-18,
@@ -3418,7 +3529,7 @@ def _pf_frame_diagram(
                 xj, yj = float(nodes.loc[j, "x (m)"]), float(nodes.loc[j, "y (m)"])
                 fig.add_trace(go.Scatter(
                     x=[xi, xj], y=[yi, yj], mode="lines",
-                    line=dict(color="#eef3fb", width=7),
+                    line=dict(color="#eef3fb", width=5),
                     hoverinfo="skip", showlegend=False,
                 ))
             except (TypeError, ValueError, KeyError, IndexError):
@@ -3433,7 +3544,7 @@ def _pf_frame_diagram(
                 x = float(nodes.loc[node_id, "x (m)"]); y = float(nodes.loc[node_id, "y (m)"])
                 fig.add_trace(go.Scatter(
                     x=[x], y=[y], mode="markers",
-                    marker=dict(symbol="triangle-up", size=20, color="#ff4d4d",
+                    marker=dict(symbol="triangle-up", size=15, color=COLOR_SUP,
                                 line=dict(color="#ffffff", width=1.5)),
                     hoverinfo="skip", showlegend=False,
                 ))
