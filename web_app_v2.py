@@ -329,77 +329,118 @@ def safe_data_editor(
     default_df: pd.DataFrame,
     **editor_kwargs
 ) -> pd.DataFrame:
+    """
+    Wrapper an toan cho st.data_editor.
+
+    FIX QUAN TRONG (loi nhap 2 lan / phai go lai nhieu lan moi nhan gia tri):
+    Nguyen nhan goc la kieu "double buffering" - moi lan rerun ham nay ghi
+    st.session_state[data_key] = edited_df (gia tri DA CHINH SUA) roi lai dua
+    chinh gia tri do lam `value` cho lan render ke tiep cua st.data_editor.
+    Vi Streamlit dinh danh moi dong theo vi tri/ID trong `value` truyen vao,
+    con "diff" (edited_rows/added_rows) cua widget lai duoc luu rieng theo
+    `key` va tinh tuong doi so voi `value` cua LAN RENDER TRUOC, viec doi
+    `value` lien tuc theo cach nay lam ID dong bi lech dan qua moi lan go,
+    nen o hien thi None va nguoi dung phai nhap lai - cang nhap nhieu o,
+    cang phai go lai nhieu lan (dung nhu mo ta: o thu 3 phai go 6 lan).
+
+    Cach fix: chi khoi tao `value` seed MOT LAN DUY NHAT (hoac khi bi reset
+    tuong minh). KHONG ghi de seed bang gia tri da edit sau moi lan render.
+    Streamlit tu dong luu va hop nhat cac thay doi cua nguoi dung thong qua
+    `key` cua widget qua cac lan rerun, nen khong can - va khong duoc - tu
+    tay ghi lai `value` moi lan.
+    """
 
     data_key = f"{widget_key}__data"
+    ver_key = f"{widget_key}__ver"
 
     if data_key not in st.session_state:
         st.session_state[data_key] = default_df.copy()
+    if ver_key not in st.session_state:
+        st.session_state[ver_key] = 0
+
+    # Widget key thuc te co gan them so phien ban (version). Khi co chinh sua
+    # LAP TRINH (vd. panel "gan nhanh" ghi thang vao bang qua pf_set_table),
+    # so phien ban tang len -> Streamlit mount mot widget MOI hoan toan, tranh
+    # xung dot voi diff cu con luu trong widget cu (chinh la loai loi da fix
+    # o tren, neu tai su dung y het key cu voi value bi doi tu ben ngoai).
+    actual_key = f"{widget_key}_v{st.session_state[ver_key]}"
 
     edited_df = st.data_editor(
         st.session_state[data_key],
-        key=widget_key,
+        key=actual_key,
         **editor_kwargs,
     )
-
-    st.session_state[data_key] = edited_df.copy()
 
     return edited_df
-    # Hiển thị Data Editor
-    edited_df = st.data_editor(
-        st.session_state[seed_key],
-        key=widget_key,
-        **editor_kwargs,
-    )
 
-    # Cập nhật Session State
-    st.session_state[seed_key] = edited_df.copy()
 
-    errors = []
+def _safe_num(v, default: float = 0.0) -> float:
+    """Tra ve so thuc hop le; NaN/None/rong -> default (tranh loi 'NaN or 0' trong Python)."""
+    try:
+        if v is None or v == "" or pd.isna(v):
+            return default
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
-    # Kiểm tra từng dòng
-    if "x_local (m)" in edited_df.columns:
 
-        for row_id, row in edited_df.iterrows():
+def pf_set_table(widget_key: str, new_df: pd.DataFrame) -> None:
+    """Cap nhat mot bang cua safe_data_editor tu code (khong phai nguoi dung go tay).
 
-            if pd.isna(row["x_local (m)"]):
-                continue
+    Dung cho cac panel "gan nhanh" (chon tiet dien, gan UDL hang loat, ...).
+    Sau khi goi ham nay PHAI st.rerun() de widget duoc mount lai voi du lieu moi.
+    """
+    data_key = f"{widget_key}__data"
+    ver_key = f"{widget_key}__ver"
+    st.session_state[data_key] = new_df.copy()
+    st.session_state[ver_key] = st.session_state.get(ver_key, 0) + 1
 
-            try:
-                x = float(row["x_local (m)"])
-            except Exception:
-                continue
 
-            if not (0.0 <= x <= L_span):
+# ---- Thu vien tiet dien don gian (cong thuc hinh hoc chuan, khong tra bang) ----
+PF_SECTION_TYPES = ["Chữ nhật đặc", "Tròn đặc", "Ống tròn (rỗng)", "Hộp chữ nhật (rỗng)", "Nhập trực tiếp A, I"]
 
-                errors.append(
-                    f"• Dòng {row_id + 1}: "
-                    f"x_local = {x:.2f} m "
-                    f"(Giới hạn: 0.00 → {L_span:.2f} m)"
-                )
+PF_MATERIALS = {
+    "Thép (E ≈ 210000 MPa)": 210e6,      # kN/m^2 (210 GPa) — tham khảo, cần đối chiếu tiêu chuẩn dùng
+    "Bê tông B25 (E ≈ 30000 MPa)": 30e6,  # kN/m^2 — Eb theo TCVN 5574 chỉ mang tính tham khảo
+    "Bê tông B30 (E ≈ 32500 MPa)": 32.5e6,
+    "Nhôm (E ≈ 70000 MPa)": 70e6,
+    "Tùy chỉnh": None,
+}
 
-    # Hiển thị lỗi
-    if errors:
 
-        st.error(
-            f"❌ Vị trí tải trọng phải nằm trong khoảng "
-            f"0.00 ≤ x_local ≤ {L_span:.2f} m"
-        )
+def pf_section_props(section_type: str, dims: dict) -> tuple[float, float] | None:
+    """Tính (A, I) theo công thức hình học tiêu chuẩn từ kích thước (đơn vị m).
+    Trả về None nếu kích thước không hợp lệ."""
+    try:
+        if section_type == "Chữ nhật đặc":
+            b, h = dims["b"], dims["h"]
+            if b <= 0 or h <= 0:
+                return None
+            return b * h, b * h ** 3 / 12.0
+        if section_type == "Tròn đặc":
+            d = dims["d"]
+            if d <= 0:
+                return None
+            return math.pi * d ** 2 / 4.0, math.pi * d ** 4 / 64.0
+        if section_type == "Ống tròn (rỗng)":
+            d_out, t = dims["d_out"], dims["t"]
+            d_in = d_out - 2 * t
+            if d_out <= 0 or t <= 0 or d_in <= 0:
+                return None
+            return (math.pi * (d_out ** 2 - d_in ** 2) / 4.0,
+                    math.pi * (d_out ** 4 - d_in ** 4) / 64.0)
+        if section_type == "Hộp chữ nhật (rỗng)":
+            b, h, t = dims["b"], dims["h"], dims["t"]
+            b_in, h_in = b - 2 * t, h - 2 * t
+            if b <= 0 or h <= 0 or t <= 0 or b_in <= 0 or h_in <= 0:
+                return None
+            return (b * h - b_in * h_in,
+                    (b * h ** 3 - b_in * h_in ** 3) / 12.0)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None
 
-        for msg in errors:
-            st.warning(msg)
 
-    return edited_df, len(errors) > 0
-    base = st.session_state[seed_key].copy()
-    if isinstance(edited, dict):
-        for ridx, changes in edited.get("edited_rows", {}).items():
-            for col, val in changes.items():
-                base.loc[int(ridx), col] = val
-        for new_row in edited.get("added_rows", []):
-            base = pd.concat([base, pd.DataFrame([new_row])], ignore_index=True)
-        deleted = sorted(edited.get("deleted_rows", []), reverse=True)
-        if deleted:
-            base = base.drop(index=deleted).reset_index(drop=True)
-    return base
 def validate_local_coordinate(
     df: pd.DataFrame,
     L_span: float,
@@ -2630,31 +2671,186 @@ def render_plane_frame() -> None:
             # Quét sạch toàn bộ dữ liệu, bảng, kết quả của Tab Plane Frame
             reset_keys_with_prefix("pf_")
             st.rerun()
-            for k in list(st.session_state.keys()):
-                if k.startswith("pf_"): st.session_state.pop(k, None)
-            st.rerun()
         st.divider()
 
     cfg = {"width": "stretch", "num_rows": "dynamic", "hide_index": True}
-    tab_nd, tab_el, tab_sup, tab_pl_nd, _ = st.tabs(
+    tab_nd, tab_el, tab_sup, tab_pl_nd, tab_udl = st.tabs(
         ["🔵 Nodes", "📐 Elements", "🔒 Supports", "⬇️ Node Loads", "📏 Element UDL"])
 
     with tab_nd:
         nodes_default = pd.DataFrame({"x (m)": [0.0, 0.0, 5.0, 5.0], "y (m)": [0.0, 4.0, 4.0, 0.0]})
         df_nodes = safe_data_editor("pf_nd_ed", nodes_default, **cfg)
+
     with tab_el:
         elems_default = pd.DataFrame(
             {"i": [0, 1, 3], "j": [1, 2, 2], "E": [200e6] * 3, "A": [0.01] * 3, "I": [1e-4] * 3,
              "udl_local": [0.0] * 3})
+
+        # Tham chiếu nhanh toạ độ node — đỡ phải lật qua tab Nodes khi khai báo i, j
+        if df_nodes is not None and not df_nodes.empty:
+            node_ref = " · ".join(
+                f"N{idx}=({r['x (m)']:.2f}, {r['y (m)']:.2f})"
+                for idx, r in df_nodes.reset_index(drop=True).iterrows()
+                if pd.notna(r.get("x (m)")) and pd.notna(r.get("y (m)"))
+            )
+            if node_ref:
+                st.caption(f"🔵 Toạ độ node hiện có (i, j bên dưới tham chiếu đến đây): {node_ref}")
+
+        with st.expander("🧱 Gán nhanh vật liệu & tiết diện (tự tính A, I — khỏi tra bảng, khỏi tính tay)",
+                          expanded=False):
+            st.caption(
+                "Chọn vật liệu và loại tiết diện, nhập kích thước theo cm — chương trình tự tính "
+                "diện tích A (m²) và mô-men quán tính I (m⁴) rồi gán vào các phần tử bạn chọn."
+            )
+
+            cur_el_df = st.session_state.get("pf_el_ed__data", elems_default).reset_index(drop=True)
+            n_el = len(cur_el_df)
+            el_options = [
+                f"E{k} (node {int(cur_el_df.iloc[k]['i'])}→{int(cur_el_df.iloc[k]['j'])})"
+                if pd.notna(cur_el_df.iloc[k].get("i")) else f"E{k}"
+                for k in range(n_el)
+            ]
+
+            c1, c2 = st.columns(2)
+            with c1:
+                mat_name = st.selectbox("Vật liệu", list(PF_MATERIALS.keys()), key="pf_mat_sel")
+            with c2:
+                sec_type = st.selectbox("Loại tiết diện", PF_SECTION_TYPES, key="pf_sec_sel")
+
+            if mat_name == "Tùy chỉnh":
+                E_val = st.number_input("E tự nhập (kN/m²)", min_value=0.0, value=200e6,
+                                         format="%.0f", key="pf_E_custom")
+            else:
+                E_val = PF_MATERIALS[mat_name]
+                st.caption(f"E = {E_val:,.0f} kN/m² — giá trị tham khảo, đối chiếu lại theo tiêu chuẩn "
+                           f"thiết kế bạn đang áp dụng trước khi dùng cho hồ sơ chính thức.")
+
+            dims: dict = {}
+            A_val = I_val = None
+            if sec_type == "Chữ nhật đặc":
+                d1, d2 = st.columns(2)
+                b_cm = d1.number_input("Bề rộng b (cm)", min_value=0.0, value=20.0, key="pf_b_cm")
+                h_cm = d2.number_input("Chiều cao h (cm)", min_value=0.0, value=30.0, key="pf_h_cm")
+                dims = {"b": b_cm / 100.0, "h": h_cm / 100.0}
+            elif sec_type == "Tròn đặc":
+                d_cm = st.number_input("Đường kính D (cm)", min_value=0.0, value=30.0, key="pf_d_cm")
+                dims = {"d": d_cm / 100.0}
+            elif sec_type == "Ống tròn (rỗng)":
+                d1, d2 = st.columns(2)
+                d_cm = d1.number_input("Đường kính ngoài D (cm)", min_value=0.0, value=30.0, key="pf_dout_cm")
+                t_cm = d2.number_input("Bề dày t (cm)", min_value=0.0, value=1.0, key="pf_tpipe_cm")
+                dims = {"d_out": d_cm / 100.0, "t": t_cm / 100.0}
+            elif sec_type == "Hộp chữ nhật (rỗng)":
+                d1, d2, d3 = st.columns(3)
+                b_cm = d1.number_input("Bề rộng b (cm)", min_value=0.0, value=30.0, key="pf_bbox_cm")
+                h_cm = d2.number_input("Chiều cao h (cm)", min_value=0.0, value=40.0, key="pf_hbox_cm")
+                t_cm = d3.number_input("Bề dày thành t (cm)", min_value=0.0, value=1.0, key="pf_tbox_cm")
+                dims = {"b": b_cm / 100.0, "h": h_cm / 100.0, "t": t_cm / 100.0}
+            else:  # Nhập trực tiếp A, I
+                d1, d2 = st.columns(2)
+                A_val = d1.number_input("Diện tích A (m²)", min_value=0.0, value=0.01,
+                                         format="%.5f", key="pf_A_direct")
+                I_val = d2.number_input("Mô-men quán tính I (m⁴)", min_value=0.0, value=1e-4,
+                                         format="%.6f", key="pf_I_direct")
+
+            if sec_type != "Nhập trực tiếp A, I":
+                props = pf_section_props(sec_type, dims)
+                if props is not None:
+                    A_val, I_val = props
+
+            if A_val is not None and I_val is not None:
+                st.markdown(f"**→ A = {A_val:.5f} m²&nbsp;&nbsp;&nbsp; I = {I_val:.6f} m⁴**")
+            else:
+                st.warning("Kích thước chưa hợp lệ (phải lớn hơn 0).")
+
+            sel_elems = st.multiselect(
+                "Áp dụng cho phần tử nào?", options=list(range(n_el)),
+                format_func=lambda k: el_options[k], default=list(range(n_el)), key="pf_sec_targets",
+            )
+
+            if st.button("✅ Áp dụng E, A, I cho phần tử đã chọn", key="pf_apply_section",
+                         disabled=(A_val is None or I_val is None or E_val is None or not sel_elems)):
+                new_df = cur_el_df.copy()
+                for k in sel_elems:
+                    new_df.loc[k, "E"] = E_val
+                    new_df.loc[k, "A"] = A_val
+                    new_df.loc[k, "I"] = I_val
+                pf_set_table("pf_el_ed", new_df)
+                st.success(f"Đã gán E, A, I cho {len(sel_elems)} phần tử.")
+                st.rerun()
+
         df_el = safe_data_editor("pf_el_ed", elems_default, **cfg)
+        st.caption("Bảng trên vẫn có thể sửa trực tiếp (kể cả thêm/xoá dòng, khai báo i, j) — "
+                   "panel phía trên chỉ là cách gán nhanh E, A, I, không bắt buộc phải dùng.")
+
     with tab_sup:
         sups_default = pd.DataFrame({"node": [0, 3], "ux": [True, True], "uy": [True, True], "rz": [True, True]})
         df_sup = safe_data_editor("pf_sup_ed", sups_default, **cfg)
+
     with tab_pl_nd:
         nloads_default = pd.DataFrame(
             {"node": pd.Series(dtype=int), "Fx (kN)": pd.Series(dtype=float), "Fy (kN)": pd.Series(dtype=float),
              "Mz (kNm)": pd.Series(dtype=float)})
         df_nload = safe_data_editor("pf_nl_ed", nloads_default, **cfg)
+
+    with tab_udl:
+        st.caption(
+            "Gán tải phân bố đều (UDL) lên phần tử — chọn phần tử, nhập q, bấm nút, khỏi phải gõ tay "
+            "vào từng ô của bảng Elements. Quy ước: q dương theo chiều trục y cục bộ của phần tử "
+            "(vuông góc trục thanh, xác định theo quy tắc bàn tay phải kể từ trục x cục bộ hướng node i→j)."
+        )
+
+        cur_el_df2 = st.session_state.get("pf_el_ed__data", elems_default).reset_index(drop=True)
+        n_el2 = len(cur_el_df2)
+
+        if n_el2 == 0:
+            st.info("Chưa có phần tử nào — khai báo phần tử ở tab 📐 Elements trước.")
+        else:
+            el_options2 = [
+                f"E{k} (node {int(cur_el_df2.iloc[k]['i'])}→{int(cur_el_df2.iloc[k]['j'])}, "
+                f"hiện tại q = {_safe_num(cur_el_df2.iloc[k].get('udl_local')):g} kN/m)"
+                if pd.notna(cur_el_df2.iloc[k].get("i")) else f"E{k}"
+                for k in range(n_el2)
+            ]
+
+            sel_udl = st.multiselect("Chọn phần tử cần gán tải", options=list(range(n_el2)),
+                                      format_func=lambda k: el_options2[k], key="pf_udl_targets")
+            q_val = st.number_input("Giá trị q (kN/m)", value=0.0, step=0.5, key="pf_udl_val")
+
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("⬇️ Gán tải cho phần tử đã chọn", key="pf_apply_udl",
+                             use_container_width=True, disabled=not sel_udl):
+                    new_df = cur_el_df2.copy()
+                    for k in sel_udl:
+                        new_df.loc[k, "udl_local"] = q_val
+                    pf_set_table("pf_el_ed", new_df)
+                    st.success(f"Đã gán q = {q_val:g} kN/m cho {len(sel_udl)} phần tử.")
+                    st.rerun()
+            with b2:
+                if st.button("🧹 Xoá tải trên phần tử đã chọn", key="pf_clear_udl",
+                             use_container_width=True, disabled=not sel_udl):
+                    new_df = cur_el_df2.copy()
+                    for k in sel_udl:
+                        new_df.loc[k, "udl_local"] = 0.0
+                    pf_set_table("pf_el_ed", new_df)
+                    st.success(f"Đã xoá tải trên {len(sel_udl)} phần tử.")
+                    st.rerun()
+
+            st.divider()
+            st.caption("Tổng hợp UDL hiện tại theo từng phần tử:")
+            st.dataframe(
+                pd.DataFrame({
+                    "Phần tử": [f"E{k}" for k in range(n_el2)],
+                    "i → j": [
+                        f"{int(cur_el_df2.iloc[k]['i'])} → {int(cur_el_df2.iloc[k]['j'])}"
+                        if pd.notna(cur_el_df2.iloc[k].get("i")) else "-"
+                        for k in range(n_el2)
+                    ],
+                    "udl_local (kN/m)": [_safe_num(cur_el_df2.iloc[k].get("udl_local")) for k in range(n_el2)],
+                }),
+                use_container_width=True, hide_index=True,
+            )
 
     result_pf: PlaneFrameResult | None = st.session_state.get("pf_result")
 
@@ -2709,7 +2905,7 @@ def render_plane_frame() -> None:
     left, right = st.columns([1.7, 1], gap="large")
     with left:
         a, b = st.columns(2)
-        with a: st.plotly_chart(_pf_geometry_plot(df_nodes, df_el, df_sup, result_pf), use_container_width=True)
+        with a: st.plotly_chart(_pf_geometry_plot(df_nodes, df_el, df_sup, result_pf, df_nload), use_container_width=True)
         with b: st.plotly_chart(_pf_diagram_plot(result_pf, "moment", "BMD"), use_container_width=True)
         c, d = st.columns(2)
         with c: st.plotly_chart(_pf_diagram_plot(result_pf, "shear", "SFD"), use_container_width=True)
@@ -2723,7 +2919,8 @@ def render_plane_frame() -> None:
                 df_nodes,
                 df_el,
                 df_sup,
-                result_pf
+                result_pf,
+                df_nload,
             )
 
             fig_bmd = _pf_diagram_plot(
@@ -2762,6 +2959,7 @@ def _pf_geometry_plot(
     df_el: pd.DataFrame,
     df_sup: pd.DataFrame,
     result_pf=None,
+    df_nload: pd.DataFrame | None = None,
 ) -> go.Figure:
     """
     Vẽ hình học khung phẳng 2D.
@@ -2788,6 +2986,10 @@ def _pf_geometry_plot(
     result_pf : PlaneFrameResult, optional
         Kết quả FEM. Hiện tại dùng để giữ tương thích
         với giao diện và có thể mở rộng sau này.
+
+    df_nload : DataFrame, optional
+        Bảng Node Loads gồm: node, Fx (kN), Fy (kN), Mz (kNm).
+        Dùng để vẽ mũi tên lực / mô-men gán vào node.
     """
 
     fig = go.Figure()
@@ -3029,6 +3231,96 @@ def _pf_geometry_plot(
                     IndexError,
                 ):
                     continue
+
+    # ==========================================================
+    # 5b. VE TAI TRONG GAN VAO NODE (Fx, Fy, Mz)
+    # ==========================================================
+    # FIX: truoc day ham nay khong nhan df_nload nen tai trong da gan
+    # o tab "Node Loads" khong bao gio duoc ve len hinh, du da tinh
+    # dung o buoc Solve.
+
+    if df_nload is not None and not df_nload.empty and "node" in df_nload.columns:
+
+        x_span = float(nodes["x (m)"].max() - nodes["x (m)"].min()) if len(nodes) else 0.0
+        y_span = float(nodes["y (m)"].max() - nodes["y (m)"].min()) if len(nodes) else 0.0
+        L_arrow = max(x_span, y_span, 1.0) * 0.18
+
+        for _, row in df_nload.iterrows():
+
+            try:
+                node_id = row.get("node")
+                if node_id is None or pd.isna(node_id):
+                    continue
+                node_id = int(node_id)
+
+                if node_id < 0 or node_id >= len(nodes):
+                    continue
+
+                x0 = float(nodes.loc[node_id, "x (m)"])
+                y0 = float(nodes.loc[node_id, "y (m)"])
+
+                fx = row.get("Fx (kN)")
+                fy = row.get("Fy (kN)")
+                mz = row.get("Mz (kNm)")
+
+                fx = float(fx) if fx not in (None, "") and pd.notna(fx) else 0.0
+                fy = float(fy) if fy not in (None, "") and pd.notna(fy) else 0.0
+                mz = float(mz) if mz not in (None, "") and pd.notna(mz) else 0.0
+
+                if fx != 0.0:
+                    sign = 1.0 if fx > 0 else -1.0
+                    fig.add_annotation(
+                        x=x0, y=y0,
+                        ax=x0 - sign * L_arrow, ay=y0,
+                        axref="x", ayref="y",
+                        showarrow=True,
+                        arrowhead=3, arrowsize=1.1, arrowwidth=2.4,
+                        arrowcolor="#e67300",
+                        text="",
+                    )
+                    fig.add_annotation(
+                        x=x0 - sign * L_arrow, y=y0,
+                        text=f"Fx={fx:g} kN",
+                        showarrow=False,
+                        font=dict(size=10, color="#e67300"),
+                        bgcolor="rgba(255,255,255,0.75)",
+                        yshift=10,
+                    )
+
+                if fy != 0.0:
+                    sign = 1.0 if fy > 0 else -1.0
+                    fig.add_annotation(
+                        x=x0, y=y0,
+                        ax=x0, ay=y0 - sign * L_arrow,
+                        axref="x", ayref="y",
+                        showarrow=True,
+                        arrowhead=3, arrowsize=1.1, arrowwidth=2.4,
+                        arrowcolor="#e67300",
+                        text="",
+                    )
+                    fig.add_annotation(
+                        x=x0, y=y0 - sign * L_arrow,
+                        text=f"Fy={fy:g} kN",
+                        showarrow=False,
+                        font=dict(size=10, color="#e67300"),
+                        bgcolor="rgba(255,255,255,0.75)",
+                        xshift=28,
+                    )
+
+                if mz != 0.0:
+                    symbol = "↻" if mz < 0 else "↺"  # chieu kim / nguoc kim theo dau quy uoc
+                    fig.add_annotation(
+                        x=x0, y=y0,
+                        text=f"{symbol} Mz={mz:g} kNm",
+                        showarrow=False,
+                        font=dict(size=11, color="#8e44ad"),
+                        bgcolor="rgba(255,255,255,0.75)",
+                        xshift=-6,
+                        yshift=-18,
+                    )
+
+            except (TypeError, ValueError, KeyError, IndexError):
+                continue
 
     # ==========================================================
     # 6. LAYOUT
