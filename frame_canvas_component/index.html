@@ -1,1 +1,512 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, sans-serif;
+    background: transparent;
+    color: #262730;
+  }
+  #root { width: 100%; }
+  .toolbar {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    padding: 6px 2px 8px 2px;
+  }
+  .btn {
+    border: 1px solid #d5d8dd; background: #ffffff; color: #262730;
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+    user-select: none; white-space: nowrap;
+  }
+  .btn:hover { background: #f0f2f6; }
+  .btn.active { background: #1f77b4; color: #ffffff; border-color: #1f77b4; }
+  .btn.danger:hover { background: #ffe8e6; border-color: #ef1d14; }
+  .sep { width: 1px; height: 22px; background: #e2e5ea; margin: 0 4px; }
+  #canvasWrap {
+    width: 100%; border: 1px solid #e2e5ea; border-radius: 8px;
+    overflow: hidden; background: #fcfcfd; touch-action: none;
+  }
+  canvas { display: block; touch-action: none; cursor: crosshair; }
+  .status {
+    display: flex; justify-content: space-between; flex-wrap: wrap;
+    font-size: 12px; color: #6b7280; padding: 6px 2px 0 2px; gap: 8px;
+  }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; }
+  .legend span { display:inline-flex; align-items:center; gap:4px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="toolbar">
+    <button class="btn active" data-mode="draw" id="btnDraw">✏️ Vẽ thanh</button>
+    <button class="btn" data-mode="support" id="btnSupport">🔒 Gối tựa</button>
+    <button class="btn" data-mode="move" id="btnMove">↔️ Di chuyển nút</button>
+    <button class="btn danger" data-mode="delete" id="btnDelete">🗑️ Xoá</button>
+    <div class="sep"></div>
+    <button class="btn" id="btnUndo">↩️ Undo</button>
+    <button class="btn" id="btnFit">🔍 Vừa khung hình</button>
+    <button class="btn" id="btnZoomOut">－</button>
+    <button class="btn" id="btnZoomIn">＋</button>
+    <div class="sep"></div>
+    <button class="btn danger" id="btnClear">🧹 Xoá tất cả</button>
+  </div>
+  <div id="canvasWrap"><canvas id="cv"></canvas></div>
+  <div class="status">
+    <div class="legend">
+      <span><span class="dot" style="background:#1f77b4"></span>Thanh / Nút</span>
+      <span><span class="dot" style="background:#ef1d14"></span>Gối tựa</span>
+      <span><span class="dot" style="background:#e67300"></span>Đang vẽ</span>
+    </div>
+    <div id="statusText">Chế độ: Vẽ thanh — 0 nút, 0 thanh</div>
+  </div>
+</div>
 
+<script>
+(function () {
+  "use strict";
+
+  const canvas = document.getElementById("cv");
+  const ctx = canvas.getContext("2d");
+  const wrap = document.getElementById("canvasWrap");
+  const statusText = document.getElementById("statusText");
+
+  let CANVAS_HEIGHT = 520;
+  let cssW = 800, cssH = CANVAS_HEIGHT;
+  let scalePxPerM = 50;
+  let snap = 0.5;
+  let originPx = { x: 60, y: CANVAS_HEIGHT - 50 };
+
+  let state = { nodes: [], elements: [], supports: {} };
+  let history = [];
+  let mode = "draw";
+  let dragging = null;
+  let seeded = false;
+  let lastResetToken = null;
+
+  // ---------- coordinate transforms ----------
+  function toPx(w) { return { x: originPx.x + w.x * scalePxPerM, y: originPx.y - w.y * scalePxPerM }; }
+  function toWorld(p) { return { x: (p.x - originPx.x) / scalePxPerM, y: -(p.y - originPx.y) / scalePxPerM }; }
+  function r3(v) { return Math.round(v * 1000) / 1000; }
+  function snapWorld(w) { return { x: r3(Math.round(w.x / snap) * snap), y: r3(Math.round(w.y / snap) * snap) }; }
+  function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+  function getPointer(e) {
+    const rect = canvas.getBoundingClientRect();
+    const cx = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
+    const cy = (e.touches && e.touches[0]) ? e.touches[0].clientY : e.clientY;
+    return { x: cx - rect.left, y: cy - rect.top };
+  }
+
+  // ---------- support type helpers ----------
+  const SUPPORT_ORDER = ["FIXED", "PIN", "ROLX", "ROLY"];
+  const SUPPORT_LABEL = { FIXED: "Ngàm", PIN: "Khớp", ROLX: "Di động ⊥Y", ROLY: "Di động ⊥X" };
+  function typeToBool(type) {
+    switch (type) {
+      case "FIXED": return { ux: true, uy: true, rz: true };
+      case "PIN": return { ux: true, uy: true, rz: false };
+      case "ROLX": return { ux: false, uy: true, rz: false };
+      case "ROLY": return { ux: true, uy: false, rz: false };
+      default: return null;
+    }
+  }
+  function boolToType(ux, uy, rz) {
+    if (ux && uy && rz) return "FIXED";
+    if (ux && uy && !rz) return "PIN";
+    if (!ux && uy) return "ROLX";
+    if (ux && !uy) return "ROLY";
+    return null;
+  }
+
+  // ---------- state helpers ----------
+  function pushHistory() {
+    history.push(JSON.parse(JSON.stringify(state)));
+    if (history.length > 60) history.shift();
+  }
+  function elementExists(a, b) {
+    return state.elements.some((e) => (e.i === a && e.j === b) || (e.i === b && e.j === a));
+  }
+  function findNodeNear(px, radius) {
+    let best = -1, bestD = radius;
+    state.nodes.forEach((n, idx) => {
+      const d = dist(toPx(n), px);
+      if (d < bestD) { bestD = d; best = idx; }
+    });
+    return best;
+  }
+  function pointSegDist(p, a, b) {
+    const abx = b.x - a.x, aby = b.y - a.y;
+    const denom = abx * abx + aby * aby || 1;
+    let t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / denom;
+    t = Math.max(0, Math.min(1, t));
+    const proj = { x: a.x + t * abx, y: a.y + t * aby };
+    return dist(p, proj);
+  }
+  function findElementNear(px, threshold) {
+    let best = -1, bestD = threshold;
+    state.elements.forEach((e, idx) => {
+      const a = state.nodes[e.i], b = state.nodes[e.j];
+      if (!a || !b) return;
+      const d = pointSegDist(px, toPx(a), toPx(b));
+      if (d < bestD) { bestD = d; best = idx; }
+    });
+    return best;
+  }
+  function findOrCreateNode(w) {
+    for (let i = 0; i < state.nodes.length; i++) {
+      const n = state.nodes[i];
+      if (Math.abs(n.x - w.x) < 1e-6 && Math.abs(n.y - w.y) < 1e-6) return i;
+    }
+    state.nodes.push({ x: w.x, y: w.y });
+    return state.nodes.length - 1;
+  }
+  function resolvePoint(px) {
+    const hit = findNodeNear(px, 10);
+    if (hit >= 0) return { world: { x: state.nodes[hit].x, y: state.nodes[hit].y }, idx: hit };
+    return { world: snapWorld(toWorld(px)), idx: null };
+  }
+
+  function commitMember(pStart, pEnd) {
+    if (dist(pStart, pEnd) < 4) return;
+    const rs = resolvePoint(pStart), re = resolvePoint(pEnd);
+    if (rs.idx != null && re.idx != null) {
+      if (rs.idx === re.idx) return;
+      if (elementExists(rs.idx, re.idx)) return;
+    }
+    pushHistory();
+    const iIdx = rs.idx != null ? rs.idx : findOrCreateNode(rs.world);
+    const jIdx = re.idx != null ? re.idx : findOrCreateNode(re.world);
+    state.elements.push({ i: iIdx, j: jIdx });
+    redraw(); sendValue();
+  }
+
+  function deleteNode(idx) {
+    pushHistory();
+    state.nodes.splice(idx, 1);
+    const remap = {};
+    let c = 0;
+    for (let k = 0; k < state.nodes.length + 1; k++) {
+      if (k === idx) continue;
+      remap[k] = c++;
+    }
+    state.elements = state.elements
+      .filter((e) => e.i !== idx && e.j !== idx)
+      .map((e) => ({ i: remap[e.i], j: remap[e.j] }));
+    const newSupports = {};
+    Object.entries(state.supports).forEach(([k, v]) => {
+      const ki = parseInt(k, 10);
+      if (ki === idx) return;
+      newSupports[remap[ki]] = v;
+    });
+    state.supports = newSupports;
+    redraw(); sendValue();
+  }
+  function deleteElement(idx) {
+    pushHistory();
+    state.elements.splice(idx, 1);
+    redraw(); sendValue();
+  }
+
+  function undo() {
+    if (!history.length) return;
+    state = history.pop();
+    redraw(); sendValue();
+  }
+  function clearAll() {
+    if (!confirm("Xoá toàn bộ khung đang vẽ trên canvas?")) return;
+    pushHistory();
+    state = { nodes: [], elements: [], supports: {} };
+    redraw(); sendValue();
+  }
+
+  // ---------- drawing ----------
+  function drawGrid() {
+    const c1 = toWorld({ x: 0, y: 0 });
+    const c2 = toWorld({ x: cssW, y: cssH });
+    const xMin = Math.floor(Math.min(c1.x, c2.x) / snap) * snap;
+    const xMax = Math.ceil(Math.max(c1.x, c2.x) / snap) * snap;
+    const yMin = Math.floor(Math.min(c1.y, c2.y) / snap) * snap;
+    const yMax = Math.ceil(Math.max(c1.y, c2.y) / snap) * snap;
+
+    ctx.lineWidth = 1;
+    for (let x = xMin; x <= xMax + 1e-9; x += snap) {
+      const isInt = Math.abs(Math.round(x) - x) < 1e-6;
+      ctx.strokeStyle = isInt ? "#dfe3e9" : "#eef1f5";
+      const p1 = toPx({ x: x, y: yMin }), p2 = toPx({ x: x, y: yMax });
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+    }
+    for (let y = yMin; y <= yMax + 1e-9; y += snap) {
+      const isInt = Math.abs(Math.round(y) - y) < 1e-6;
+      ctx.strokeStyle = isInt ? "#dfe3e9" : "#eef1f5";
+      const p1 = toPx({ x: xMin, y: y }), p2 = toPx({ x: xMax, y: y });
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+    }
+    ctx.strokeStyle = "#b9bfc9"; ctx.lineWidth = 1.5;
+    const ax1 = toPx({ x: xMin, y: 0 }), ax2 = toPx({ x: xMax, y: 0 });
+    ctx.beginPath(); ctx.moveTo(ax1.x, ax1.y); ctx.lineTo(ax2.x, ax2.y); ctx.stroke();
+    const ay1 = toPx({ x: 0, y: yMin }), ay2 = toPx({ x: 0, y: yMax });
+    ctx.beginPath(); ctx.moveTo(ay1.x, ay1.y); ctx.lineTo(ay2.x, ay2.y); ctx.stroke();
+  }
+
+  function drawElements() {
+    ctx.lineCap = "round";
+    state.elements.forEach((e, idx) => {
+      const a = state.nodes[e.i], b = state.nodes[e.j];
+      if (!a || !b) return;
+      const pa = toPx(a), pb = toPx(b);
+      ctx.strokeStyle = "#1f77b4"; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+      const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.fillRect(mx - 13, my - 8, 26, 14);
+      ctx.fillStyle = "#333"; ctx.font = "11px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText("E" + idx, mx, my + 3);
+    });
+  }
+
+  function drawNodes() {
+    state.nodes.forEach((n, idx) => {
+      const p = toPx(n);
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffffff"; ctx.fill();
+      ctx.strokeStyle = "#1f77b4"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = "#111"; ctx.font = "11px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText("N" + idx, p.x, p.y - 11);
+    });
+  }
+
+  function drawSupports() {
+    Object.entries(state.supports).forEach(([k, type]) => {
+      const idx = parseInt(k, 10);
+      const n = state.nodes[idx];
+      if (!n) return;
+      const p = toPx(n);
+      const y0 = p.y + 12;
+      ctx.strokeStyle = "#ef1d14"; ctx.fillStyle = "#ef1d14"; ctx.lineWidth = 1.6;
+      if (type === "FIXED") {
+        ctx.beginPath(); ctx.moveTo(p.x - 10, y0); ctx.lineTo(p.x + 10, y0); ctx.stroke();
+        for (let i = -10; i <= 8; i += 4) {
+          ctx.beginPath(); ctx.moveTo(p.x + i, y0); ctx.lineTo(p.x + i - 4, y0 + 8); ctx.stroke();
+        }
+      } else if (type === "PIN") {
+        ctx.beginPath(); ctx.moveTo(p.x, p.y + 6); ctx.lineTo(p.x - 9, y0 + 10); ctx.lineTo(p.x + 9, y0 + 10); ctx.closePath(); ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.moveTo(p.x, p.y + 6); ctx.lineTo(p.x - 9, y0 + 10); ctx.lineTo(p.x + 9, y0 + 10); ctx.closePath(); ctx.stroke();
+        ctx.beginPath(); ctx.arc(p.x - 5, y0 + 13, 3, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(p.x + 5, y0 + 13, 3, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.font = "10px sans-serif"; ctx.textAlign = "left";
+      ctx.fillText(SUPPORT_LABEL[type], p.x + 14, y0 + 10);
+    });
+  }
+
+  function drawPreview() {
+    if (!dragging || dragging.type !== "draw") return;
+    const rs = resolvePoint(dragging.start);
+    const re = resolvePoint(dragging.cur);
+    const pa = toPx(rs.world), pb = toPx(re.world);
+    ctx.save();
+    ctx.setLineDash([7, 5]);
+    ctx.strokeStyle = "#e67300"; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+    ctx.restore();
+    [rs, re].forEach((r) => {
+      const p = toPx(r.world);
+      ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = r.idx != null ? "#28a745" : "#e67300";
+      ctx.fill();
+    });
+  }
+
+  function redraw() {
+    ctx.clearRect(0, 0, cssW, cssH);
+    drawGrid();
+    drawElements();
+    drawSupports();
+    drawNodes();
+    drawPreview();
+    updateStatus();
+  }
+
+  const MODE_LABEL = { draw: "Vẽ thanh", support: "Gối tựa", move: "Di chuyển nút", delete: "Xoá" };
+  function updateStatus() {
+    statusText.textContent =
+      "Chế độ: " + MODE_LABEL[mode] + " — " + state.nodes.length + " nút, " +
+      state.elements.length + " thanh, " + Object.keys(state.supports).length + " gối tựa";
+  }
+
+  // ---------- value out ----------
+  function sendValue() {
+    const nodes = state.nodes.map((n) => ({ x: r3(n.x), y: r3(n.y) }));
+    const elements = state.elements.map((e) => ({ i: e.i, j: e.j }));
+    const supports = Object.entries(state.supports).map(([idx, type]) => {
+      const b = typeToBool(type);
+      return { node: parseInt(idx, 10), ux: b.ux, uy: b.uy, rz: b.rz };
+    });
+    const value = { nodes: nodes, elements: elements, supports: supports };
+    window.parent.postMessage({ type: "streamlit:setComponentValue", value: value, dataType: "json" }, "*");
+  }
+
+  // ---------- view controls ----------
+  function zoom(delta) {
+    scalePxPerM = Math.max(15, Math.min(160, scalePxPerM + delta));
+    redraw();
+  }
+  function fitView() {
+    if (!state.nodes.length) {
+      scalePxPerM = 50; originPx = { x: 60, y: cssH - 50 }; redraw(); return;
+    }
+    const xs = state.nodes.map((n) => n.x), ys = state.nodes.map((n) => n.y);
+    const xMin = Math.min(...xs, 0), xMax = Math.max(...xs, 1);
+    const yMin = Math.min(...ys, 0), yMax = Math.max(...ys, 1);
+    const spanX = Math.max(xMax - xMin, 1), spanY = Math.max(yMax - yMin, 1);
+    const availW = cssW - 110, availH = cssH - 100;
+    scalePxPerM = Math.max(15, Math.min(160, Math.min(availW / spanX, availH / spanY)));
+    originPx = { x: 70 - xMin * scalePxPerM, y: cssH - 60 + yMin * scalePxPerM };
+    redraw();
+  }
+
+  // ---------- mode / toolbar ----------
+  function setMode(m) {
+    mode = m; dragging = null;
+    document.querySelectorAll(".btn[data-mode]").forEach((b) => {
+      b.classList.toggle("active", b.getAttribute("data-mode") === m);
+    });
+    updateStatus();
+  }
+  document.getElementById("btnDraw").addEventListener("click", () => setMode("draw"));
+  document.getElementById("btnSupport").addEventListener("click", () => setMode("support"));
+  document.getElementById("btnMove").addEventListener("click", () => setMode("move"));
+  document.getElementById("btnDelete").addEventListener("click", () => setMode("delete"));
+  document.getElementById("btnUndo").addEventListener("click", undo);
+  document.getElementById("btnClear").addEventListener("click", clearAll);
+  document.getElementById("btnFit").addEventListener("click", fitView);
+  document.getElementById("btnZoomIn").addEventListener("click", () => zoom(10));
+  document.getElementById("btnZoomOut").addEventListener("click", () => zoom(-10));
+
+  // ---------- pointer / touch events ----------
+  function onDown(e) {
+    e.preventDefault();
+    const px = getPointer(e);
+    if (mode === "draw") {
+      dragging = { type: "draw", start: px, cur: px };
+    } else if (mode === "move") {
+      const hit = findNodeNear(px, 12);
+      if (hit >= 0) { pushHistory(); dragging = { type: "move", nodeIdx: hit, moved: false }; }
+    }
+    redraw();
+  }
+  function onMove(e) {
+    if (!dragging) return;
+    e.preventDefault();
+    const px = getPointer(e);
+    if (dragging.type === "draw") {
+      dragging.cur = px; redraw();
+    } else if (dragging.type === "move") {
+      const w = snapWorld(toWorld(px));
+      state.nodes[dragging.nodeIdx] = w;
+      dragging.moved = true;
+      redraw();
+    }
+  }
+  function onUp(e) {
+    const px = getPointer(e.changedTouches ? e.changedTouches[0] : e);
+    if (dragging) {
+      if (dragging.type === "draw") {
+        commitMember(dragging.start, px);
+      } else if (dragging.type === "move") {
+        if (dragging.moved) sendValue(); else history.pop();
+      }
+      dragging = null;
+      redraw();
+    } else {
+      handleClick(px);
+    }
+  }
+  function handleClick(px) {
+    if (mode === "support") {
+      const hit = findNodeNear(px, 12);
+      if (hit < 0) return;
+      pushHistory();
+      const cur = state.supports[hit];
+      let next;
+      if (cur === undefined) next = SUPPORT_ORDER[0];
+      else {
+        const i = SUPPORT_ORDER.indexOf(cur);
+        next = i + 1 < SUPPORT_ORDER.length ? SUPPORT_ORDER[i + 1] : undefined;
+      }
+      if (next === undefined) delete state.supports[hit];
+      else state.supports[hit] = next;
+      redraw(); sendValue();
+    } else if (mode === "delete") {
+      const hitNode = findNodeNear(px, 12);
+      if (hitNode >= 0) { deleteNode(hitNode); return; }
+      const hitEl = findElementNear(px, 9);
+      if (hitEl >= 0) { deleteElement(hitEl); return; }
+    }
+  }
+
+  canvas.addEventListener("mousedown", onDown);
+  canvas.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+  canvas.addEventListener("touchstart", onDown, { passive: false });
+  canvas.addEventListener("touchmove", onMove, { passive: false });
+  canvas.addEventListener("touchend", onUp, { passive: false });
+
+  // ---------- sizing ----------
+  function resize() {
+    cssW = wrap.clientWidth || 800;
+    cssH = CANVAS_HEIGHT;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    canvas.style.width = cssW + "px"; canvas.style.height = cssH + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    originPx.y = cssH - 50;
+    redraw();
+    setFrameHeight();
+  }
+  function setFrameHeight() {
+    const total = document.body.scrollHeight + 12;
+    window.parent.postMessage({ type: "streamlit:setFrameHeight", height: total }, "*");
+  }
+  window.addEventListener("resize", resize);
+
+  // ---------- Streamlit protocol ----------
+  function seedFromArgs(args) {
+    state = {
+      nodes: (args.nodes || []).map((n) => ({ x: +n.x, y: +n.y })),
+      elements: (args.elements || []).map((e) => ({ i: +e.i, j: +e.j })),
+      supports: {},
+    };
+    (args.supports || []).forEach((s) => {
+      const t = boolToType(!!s.ux, !!s.uy, !!s.rz);
+      if (t) state.supports[s.node] = t;
+    });
+    snap = args.snap || 0.5;
+    history = [];
+    CANVAS_HEIGHT = args.height || 520;
+  }
+
+  window.addEventListener("message", (event) => {
+    const d = event.data;
+    if (!d || !d.type) return;
+    if (d.type === "streamlit:render") {
+      const args = d.args || {};
+      if (!seeded || args.reset_token !== lastResetToken) {
+        seeded = true;
+        lastResetToken = args.reset_token;
+        seedFromArgs(args);
+        resize();
+        fitView();
+      }
+    }
+  });
+
+  resize();
+  window.parent.postMessage({ type: "streamlit:componentReady", apiVersion: 1 }, "*");
+})();
+</script>
+</body>
+</html>
