@@ -3784,49 +3784,23 @@ def _pf_geometry_plot(
                         nodes.loc[node_id, "y (m)"]
                     )
 
-                    ux_fixed = bool(row.get("ux", True))
-                    uy_fixed = bool(row.get("uy", True))
-                    rz_fixed = bool(row.get("rz", True))
-
-                    if ux_fixed and uy_fixed and rz_fixed:
-                        sup_type, sup_symbol, sup_label = "FIXED", "square", "Ngàm"
-                    elif ux_fixed and uy_fixed and not rz_fixed:
-                        sup_type, sup_symbol, sup_label = "PIN", "triangle-up", "Khớp"
-                    elif not ux_fixed and uy_fixed:
-                        sup_type, sup_symbol, sup_label = "ROLX", "triangle-up-open", "Di động ⊥Y"
-                    elif ux_fixed and not uy_fixed:
-                        sup_type, sup_symbol, sup_label = "ROLY", "diamond-open", "Di động ⊥X"
-                    else:
-                        sup_type, sup_symbol, sup_label = "NONE", "circle-open", "Không gối"
-
                     fig.add_trace(
                         go.Scatter(
                             x=[x],
                             y=[y],
                             mode="markers",
                             marker=dict(
-                                symbol=sup_symbol,
+                                symbol="triangle-up",
                                 size=15,
                                 color=COLOR_SUP,
-                                line=dict(width=2, color=COLOR_SUP),
                             ),
                             name="Support",
                             hovertemplate=(
-                                f"Support at Node {node_id}<br>{sup_label} ({sup_type})"
+                                f"Support at Node {node_id}"
                                 "<extra></extra>"
                             ),
                             showlegend=False,
                         )
-                    )
-
-                    fig.add_annotation(
-                        x=x,
-                        y=y,
-                        text=sup_label,
-                        showarrow=False,
-                        font=dict(size=10, color=COLOR_SUP),
-                        bgcolor="rgba(255,255,255,0.8)",
-                        yshift=-16,
                     )
 
                 except (
@@ -4088,20 +4062,9 @@ def _pf_frame_diagram(
                 if node_id < 0 or node_id >= len(nodes):
                     continue
                 x = float(nodes.loc[node_id, "x (m)"]); y = float(nodes.loc[node_id, "y (m)"])
-                _ux_f = bool(row.get("ux", True)); _uy_f = bool(row.get("uy", True)); _rz_f = bool(row.get("rz", True))
-                if _ux_f and _uy_f and _rz_f:
-                    _sym = "square"
-                elif _ux_f and _uy_f and not _rz_f:
-                    _sym = "triangle-up"
-                elif not _ux_f and _uy_f:
-                    _sym = "triangle-up-open"
-                elif _ux_f and not _uy_f:
-                    _sym = "diamond-open"
-                else:
-                    _sym = "circle-open"
                 fig.add_trace(go.Scatter(
                     x=[x], y=[y], mode="markers",
-                    marker=dict(symbol=_sym, size=15, color=COLOR_SUP,
+                    marker=dict(symbol="triangle-up", size=15, color=COLOR_SUP,
                                 line=dict(color="#ffffff", width=1.5)),
                     hoverinfo="skip", showlegend=False,
                 ))
