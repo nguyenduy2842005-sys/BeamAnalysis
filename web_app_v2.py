@@ -3071,7 +3071,7 @@ def _pf_geometry_plot(
                             mode="lines",
                             line=dict(
                                 color="#1f77b4",
-                                width=4,
+                                width=6,
                             ),
                             hovertemplate=(
                                 f"Element: {i} → {j}"
@@ -3105,12 +3105,13 @@ def _pf_geometry_plot(
                 for i in range(len(nodes))
             ],
             textposition="top center",
+            textfont=dict(size=15, color="#ffffff"),
             marker=dict(
-                size=10,
+                size=13,
                 color="#ffffff",
                 line=dict(
                     color="#1f77b4",
-                    width=2,
+                    width=3,
                 ),
             ),
             name="Nodes",
@@ -3159,7 +3160,7 @@ def _pf_geometry_plot(
                             mode="markers",
                             marker=dict(
                                 symbol="triangle-up",
-                                size=14,
+                                size=20,
                                 color="#d62728",
                             ),
                             name="Support",
@@ -3218,10 +3219,10 @@ def _pf_geometry_plot(
                         text=f"E{e_id}",
                         showarrow=False,
                         font=dict(
-                            size=11,
+                            size=14,
                             color="#111111",
                         ),
-                        bgcolor="rgba(255,255,255,0.7)",
+                        bgcolor="rgba(255,255,255,0.75)",
                     )
 
                 except (
@@ -3274,7 +3275,7 @@ def _pf_geometry_plot(
                         ax=x0 - sign * L_arrow, ay=y0,
                         axref="x", ayref="y",
                         showarrow=True,
-                        arrowhead=3, arrowsize=1.1, arrowwidth=2.4,
+                        arrowhead=3, arrowsize=1.3, arrowwidth=3.2,
                         arrowcolor="#e67300",
                         text="",
                     )
@@ -3282,9 +3283,9 @@ def _pf_geometry_plot(
                         x=x0 - sign * L_arrow, y=y0,
                         text=f"Fx={fx:g} kN",
                         showarrow=False,
-                        font=dict(size=10, color="#e67300"),
-                        bgcolor="rgba(255,255,255,0.75)",
-                        yshift=10,
+                        font=dict(size=13, color="#e67300"),
+                        bgcolor="rgba(255,255,255,0.8)",
+                        yshift=12,
                     )
 
                 if fy != 0.0:
@@ -3294,7 +3295,7 @@ def _pf_geometry_plot(
                         ax=x0, ay=y0 - sign * L_arrow,
                         axref="x", ayref="y",
                         showarrow=True,
-                        arrowhead=3, arrowsize=1.1, arrowwidth=2.4,
+                        arrowhead=3, arrowsize=1.3, arrowwidth=3.2,
                         arrowcolor="#e67300",
                         text="",
                     )
@@ -3302,9 +3303,9 @@ def _pf_geometry_plot(
                         x=x0, y=y0 - sign * L_arrow,
                         text=f"Fy={fy:g} kN",
                         showarrow=False,
-                        font=dict(size=10, color="#e67300"),
-                        bgcolor="rgba(255,255,255,0.75)",
-                        xshift=28,
+                        font=dict(size=13, color="#e67300"),
+                        bgcolor="rgba(255,255,255,0.8)",
+                        xshift=32,
                     )
 
                 if mz != 0.0:
@@ -3313,8 +3314,8 @@ def _pf_geometry_plot(
                         x=x0, y=y0,
                         text=f"{symbol} Mz={mz:g} kNm",
                         showarrow=False,
-                        font=dict(size=11, color="#8e44ad"),
-                        bgcolor="rgba(255,255,255,0.75)",
+                        font=dict(size=13, color="#8e44ad"),
+                        bgcolor="rgba(255,255,255,0.8)",
                         xshift=-6,
                         yshift=-18,
                     )
@@ -3417,7 +3418,7 @@ def _pf_frame_diagram(
                 xj, yj = float(nodes.loc[j, "x (m)"]), float(nodes.loc[j, "y (m)"])
                 fig.add_trace(go.Scatter(
                     x=[xi, xj], y=[yi, yj], mode="lines",
-                    line=dict(color="#2b2b2b", width=3),
+                    line=dict(color="#eef3fb", width=7),
                     hoverinfo="skip", showlegend=False,
                 ))
             except (TypeError, ValueError, KeyError, IndexError):
@@ -3432,7 +3433,8 @@ def _pf_frame_diagram(
                 x = float(nodes.loc[node_id, "x (m)"]); y = float(nodes.loc[node_id, "y (m)"])
                 fig.add_trace(go.Scatter(
                     x=[x], y=[y], mode="markers",
-                    marker=dict(symbol="triangle-up", size=12, color="#d62728"),
+                    marker=dict(symbol="triangle-up", size=20, color="#ff4d4d",
+                                line=dict(color="#ffffff", width=1.5)),
                     hoverinfo="skip", showlegend=False,
                 ))
             except (TypeError, ValueError, KeyError, IndexError):
