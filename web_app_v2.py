@@ -3896,6 +3896,99 @@ def _pf_geometry_plot(
                     continue
 
     # ==========================================================
+    # 2b. VẼ TẢI PHÂN BỐ ĐỀU (UDL) TRÊN TỪNG PHẦN TỬ
+    # ==========================================================
+    # FIX: UDL đã được gán ở bảng Elements (cột udl_local) và đã tính đúng
+    # trong bước Solve, nhưng trước đây KHÔNG BAO GIỜ được vẽ lên hình học
+    # -> người dùng gán tải mà không thấy nó nằm ở đâu. Bổ sung dải tải +
+    # mũi tên dọc theo phần tử, đồng bộ màu xanh lá với quy ước UDL của
+    # 2 tab Dầm (Single Beam / Continuous Beam).
+    #
+    # Quy ước: q dương theo chiều trục y cục bộ của phần tử — trục y cục bộ
+    # được xác định bằng cách quay trục x cục bộ (hướng từ node i -> j)
+    # 90° ngược chiều kim đồng hồ (quy tắc bàn tay phải).
+
+    if (
+        df_el is not None and not df_el.empty
+        and "i" in df_el.columns and "j" in df_el.columns
+        and "udl_local" in df_el.columns
+    ):
+
+        x_span_u = float(nodes["x (m)"].max() - nodes["x (m)"].min()) if len(nodes) else 0.0
+        y_span_u = float(nodes["y (m)"].max() - nodes["y (m)"].min()) if len(nodes) else 0.0
+        L_off = max(max(x_span_u, y_span_u) * 0.12, 0.35)
+
+        for _, row in df_el.iterrows():
+            try:
+                i = int(row["i"])
+                j = int(row["j"])
+
+                q = row.get("udl_local")
+                q = float(q) if q not in (None, "") and pd.notna(q) else 0.0
+                if abs(q) < 1e-9:
+                    continue
+
+                if i < 0 or j < 0 or i >= len(nodes) or j >= len(nodes):
+                    continue
+
+                xi, yi = float(nodes.loc[i, "x (m)"]), float(nodes.loc[i, "y (m)"])
+                xj, yj = float(nodes.loc[j, "x (m)"]), float(nodes.loc[j, "y (m)"])
+
+                dx, dy = xj - xi, yj - yi
+                L = math.hypot(dx, dy)
+                if L < 1e-9:
+                    continue
+
+                tx, ty = dx / L, dy / L        # trục x cục bộ (i -> j)
+                nx, ny = -ty, tx                # trục y cục bộ (quay 90° ngược kim đồng hồ — khớp T trong fem_core._rotation_matrix)
+                sign = 1.0 if q > 0 else -1.0
+                # Mũi tên phải TRỎ THEO chiều lực (kết thúc tại thanh), nên điểm gốc (đuôi mũi tên)
+                # nằm ở phía NGƯỢC với chiều +local_y*sign(q); dải tải tô mờ cũng đặt cùng phía đuôi mũi tên.
+                ox, oy = -nx * L_off * sign, -ny * L_off * sign
+
+                # Dải tải phân bố (vùng tô mờ)
+                fig.add_trace(
+                    go.Scatter(
+                        x=[xi, xj, xj + ox, xi + ox, xi],
+                        y=[yi, yj, yj + oy, yi + oy, yi],
+                        fill="toself",
+                        mode="lines",
+                        line=dict(color="#28a745", width=1),
+                        fillcolor="rgba(40,167,69,0.15)",
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
+
+                # Mũi tên phân bố dọc theo phần tử, hướng vào thanh
+                n_arrows = max(3, int(L / 0.9))
+                for k in range(n_arrows + 1):
+                    tt = k / n_arrows
+                    px_, py_ = xi + tx * L * tt, yi + ty * L * tt
+                    fig.add_annotation(
+                        x=px_, y=py_,
+                        ax=px_ + ox, ay=py_ + oy,
+                        axref="x", ayref="y",
+                        showarrow=True,
+                        arrowhead=2, arrowsize=0.9, arrowwidth=1.6,
+                        arrowcolor="#28a745",
+                        text="",
+                    )
+
+                # Nhãn giá trị q tại điểm giữa
+                xm, ym = (xi + xj) / 2 + ox, (yi + yj) / 2 + oy
+                fig.add_annotation(
+                    x=xm, y=ym,
+                    text=f"q={q:g} kN/m",
+                    showarrow=False,
+                    font=dict(size=11, color="#168f2c"),
+                    bgcolor="rgba(255,255,255,0.85)",
+                )
+
+            except (TypeError, ValueError, KeyError, IndexError):
+                continue
+
+    # ==========================================================
     # 3. VẼ NODES
     # ==========================================================
 
